@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ role.name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ role.name }}</h1>
+    <p class="lede"><a href="{% url 'org:department_detail' role.department.pk %}">{{ role.department.name }}</a></p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'org:role_edit' role.pk %}">Edit</a>
+    <a class="btn" href="{% url 'reporting:compliance' %}?department={{ role.department.pk }}">Compliance report</a>
+  </div>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <h2>About this role</h2>
+    <dl class="facts">
+      <dt>Department</dt><dd>{{ role.department.name }}</dd>
+      <dt>Leadership</dt><dd>{{ role.get_leadership_display }}</dd>
+      <dt>Position of trust</dt><dd>{% if role.is_position_of_trust %}Yes — full screening required{% else %}No{% endif %}</dd>
+      <dt>Personal information</dt><dd>{% if role.handles_personal_info %}Yes{% else %}No{% endif %}</dd>
+      <dt>Status</dt><dd>{% if role.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</dd>
+    </dl>
+    {% if role.description %}
+      <h3 class="mt2">Description</h3>
+      <p class="mb0">{{ role.description|linebreaksbr }}</p>
+    {% else %}
+      <p class="muted mt1 mb0">No description recorded.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Requirements that apply</h2>
+    <p class="small muted">Everyone serving in this role needs these.</p>
+    <ul class="mb0">
+      {% for definition in applicable_requirements %}
+        <li>
+          <a href="{% url 'requirements:definition_detail' definition.pk %}">{{ definition.name }}</a>
+          <span class="small faint">— {{ definition.cadence_display }}{% if definition.age_rule == "adults_only" %}, adults only{% endif %}</span>
+        </li>
+      {% empty %}
+        <li class="muted">None. Check the requirement list and its "applies to" rules.</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<div class="card card--flush">
+  <div class="card-head"><h2>Currently serving</h2></div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Volunteer</th><th>Since</th><th>Standing</th></tr></thead>
+      <tbody>
+        {% for assignment in assignments %}
+          <tr>
+            <td><a href="{% url 'org:volunteer_detail' assignment.volunteer.pk %}"><strong>{{ assignment.volunteer.sort_name }}</strong></a></td>
+            <td class="small nowrap">{{ assignment.started_on|date:"j M Y" }}</td>
+            <td>
+              {% if assignment.volunteer.is_permanently_disqualified %}<span class="badge badge--danger">Disqualified</span>
+              {% elif assignment.volunteer.is_blocked %}<span class="badge badge--danger">Blocked</span>
+              {% else %}<span class="badge badge--ok">Serving</span>{% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="3" class="empty"><strong>Nobody is serving in this role</strong></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

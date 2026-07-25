@@ -1,0 +1,32 @@
+{% extends "base_console.html" %}
+{% block console_title %}Settings · {{ church.name }}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Settings — {{ church.name }}</h1>
+    <p class="lede">
+      The short code and schema name are fixed once a church exists; everything below can
+      change.
+    </p>
+  </div>
+</div>
+
+<form method="post" novalidate>
+  {% csrf_token %}
+  <fieldset>
+    <legend>Church settings</legend>
+    {% include "partials/form.html" with form=form %}
+    <p class="helptext">
+      Changing the document mode affects new records only. Files a church has already
+      entrusted to the system are kept and stay readable.
+    </p>
+  </fieldset>
+
+  <div class="btn-row">
+    <button type="submit" class="btn btn--primary">Save settings</button>
+    <a class="btn" href="{% url 'tenants:church_detail' church.pk %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

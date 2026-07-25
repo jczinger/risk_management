@@ -1,0 +1,32 @@
+# Secrets — never commit.
+# The glob matters: .env.production holds PLATFORM_MASTER_KEY, and committing it would put
+# the key that decrypts every church's data into the repository.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Django
+/media/
+/staticfiles/
+*.sqlite3
+celerybeat-schedule*
+
+# Local backups
+/backups/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

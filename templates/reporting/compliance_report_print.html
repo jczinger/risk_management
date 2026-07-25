@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% comment %}
+Print / PDF version of the compliance report.
+
+Same body as the screen view, different chrome: a proper document header with the church
+name and date, and a footer stating what the report covers. WeasyPrint renders this file
+directly, which is why the header is a real element rather than an @page rule.
+{% endcomment %}
+
+{% block title %}Compliance report — {{ church_name }}{% endblock %}
+{% block body_attrs %}{% if pdf %} class="pdf"{% endif %}{% endblock %}
+{% block nav %}{% endblock %}
+
+{% block content %}
+<div class="print-head">
+  <h1>Volunteer screening compliance report</h1>
+  <div class="meta">
+    <strong>{{ church_name }}</strong>
+    · {% if department %}{{ department.name }}{% else %}All departments{% endif %}
+    · As at {{ as_of|date:"j F Y" }}
+    {% if include_inactive %} · including past volunteers{% endif %}
+  </div>
+</div>
+
+{% if not pdf %}
+  <div class="no-print btn-row mb1">
+    <button type="button" class="btn btn--primary" onclick="window.print()">Print this page</button>
+    <a class="btn" href="?{% if department %}department={{ department.pk }}&{% endif %}format=pdf">Download as PDF</a>
+    <a class="btn" href="{% url 'reporting:compliance' %}{% if department %}?department={{ department.pk }}{% endif %}">Back to the report</a>
+  </div>
+{% endif %}
+
+<div class="grid grid--4 mb1">
+  <div class="tile"><div class="n">{{ total }}</div><div class="k">Volunteers</div></div>
+  <div class="tile"><div class="n">{{ compliant_count }}</div><div class="k">Nothing owed</div></div>
+  <div class="tile"><div class="n">{{ non_compliant_count }}</div><div class="k">Action needed</div></div>
+  <div class="tile"><div class="n">{% if compliance_rate is not None %}{{ compliance_rate }}%{% else %}—{% endif %}</div><div class="k">Compliant</div></div>
+</div>
+
+{% include "reporting/_compliance_table.html" %}
+
+<div class="print-foot">
+  <p>
+    <strong>What this report covers.</strong> Every volunteer in scope, and every screening
+    requirement that applies to them under {{ church_name }}'s Plan to Protect-based
+    policy, as configured in this system on {{ as_of|date:"j F Y" }}. "Nothing owed" means no
+    overdue and no outstanding requirements at that date; requirements falling due within
+    the next {{ due_soon_days }} days are reported separately and do not count against
+    compliance.
+  </p>
+  <p class="mb0">
+    Generated from the Volunteer Management System. Personal information is encrypted at
+    rest; this report deliberately shows names, roles, requirement names, statuses and dates
+    only. A complete individual file is available for any volunteer.
+  </p>
+</div>
+{% endblock %}

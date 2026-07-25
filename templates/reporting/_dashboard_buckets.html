@@ -1,0 +1,32 @@
+{% comment %}
+The three renewal buckets. Rendered standalone for HTMX filter swaps.
+
+"Outstanding" is shown as a fourth panel rather than folded into overdue: onboarding work
+that has no deadline yet is not the same thing as a lapsed clearance, and treating them
+alike would either cry wolf or hide a real gap.
+{% endcomment %}
+
+<div class="grid grid--3 mb1">
+  <div class="tile {% if counts.overdue %}tile--danger{% endif %}">
+    <div class="n">{{ counts.overdue }}</div><div class="k">Overdue</div>
+  </div>
+  <div class="tile {% if counts.due_soon %}tile--warn{% endif %}">
+    <div class="n">{{ counts.due_soon }}</div><div class="k">Due within 60 days</div>
+  </div>
+  <div class="tile tile--ok">
+    <div class="n">{{ counts.satisfied }}</div><div class="k">Compliant</div>
+  </div>
+</div>
+
+{% include "reporting/_bucket_table.html" with title="Overdue" subtitle="Past their renewal date or deadline. These need attention now." rows=buckets.overdue tone="danger" %}
+{% include "reporting/_bucket_table.html" with title="Coming due within 60 days" subtitle="Start these before they lapse." rows=buckets.due_soon tone="warn" %}
+{% include "reporting/_bucket_table.html" with title="Outstanding onboarding" subtitle="Started or not yet started, with no deadline attached." rows=buckets.outstanding tone="" %}
+
+{% if not buckets.overdue and not buckets.due_soon and not buckets.outstanding %}
+  <div class="card">
+    <div class="empty">
+      <strong>Nothing outstanding</strong>
+      Every applicable requirement is satisfied and nothing falls due in the next 60 days.
+    </div>
+  </div>
+{% endif %}

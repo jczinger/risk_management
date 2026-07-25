@@ -1,0 +1,10 @@
+from django.apps import AppConfig
+
+
+class DocumentsConfig(AppConfig):
+    """Clearance documents in three storage modes."""
+
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "apps.documents"
+    label = "documents"
+    verbose_name = "Documents"

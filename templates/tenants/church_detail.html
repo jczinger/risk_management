@@ -1,0 +1,97 @@
+{% extends "base_console.html" %}
+{% block console_title %}{{ church.name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ church.name }}</h1>
+    <p class="lede">Schema <code>{{ church.schema_name }}</code>{% if church.url %} · <a href="{{ church.url }}">{{ church.primary_domain.domain }}</a>{% endif %}</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'tenants:church_settings' church.pk %}">Settings</a>
+    <a class="btn" href="{% url 'tenants:church_list' %}">All churches</a>
+  </div>
+</div>
+
+{% if church.key_backup_pending %}
+  <div class="callout callout--warning">
+    <h3>Key backup still outstanding</h3>
+    <p class="mb0">
+      This church's administrators are being redirected to the key-backup step and
+      cannot use the rest of the system until one of them confirms.
+    </p>
+  </div>
+{% endif %}
+
+<div class="grid grid--2">
+  <div class="card">
+    <h2>Registry</h2>
+    <dl class="facts">
+      <dt>Status</dt>
+      <dd>{% if church.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</dd>
+      <dt>Documents</dt><dd>{{ church.get_document_mode_display }}</dd>
+      <dt>Reminders</dt>
+      <dd>{% if church.notifications_enabled %}{{ church.reminder_lead_days }} days before expiry{% else %}<span class="faint">Disabled</span>{% endif %}</dd>
+      <dt>Contact</dt>
+      <dd>{% if church.contact_name or church.contact_email %}{{ church.contact_name }}{% if church.contact_email %} &lt;{{ church.contact_email }}&gt;{% endif %}{% else %}<span class="faint">Not recorded</span>{% endif %}</dd>
+      <dt>Added</dt><dd>{{ church.created_on|date:"j F Y" }}</dd>
+      <dt>Hostnames</dt>
+      <dd>
+        {% for domain in church.domains.all %}
+          <div class="mono small">{{ domain.domain }}{% if domain.is_primary %} <span class="badge badge--info">primary</span>{% endif %}</div>
+        {% empty %}<span class="faint">None — this church is unreachable</span>{% endfor %}
+      </dd>
+    </dl>
+    {% if church.notes %}
+      <h3 class="mt2">Operator notes</h3>
+      <p class="small mb0">{{ church.notes|linebreaksbr }}</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Encryption key</h2>
+    <dl class="facts">
+      <dt>Fingerprint</dt><dd class="mono">{{ church.dek_fingerprint|default:"—" }}</dd>
+      <dt>Backed up</dt>
+      <dd>
+        {% if church.key_backup_pending %}
+          <span class="badge badge--warn">Pending</span>
+        {% else %}
+          <span class="badge badge--ok">{{ church.key_backup_confirmed_at|date:"j M Y, H:i" }}</span>
+          {% if church.key_backup_confirmed_by %}<div class="small faint">by {{ church.key_backup_confirmed_by }}</div>{% endif %}
+        {% endif %}
+      </dd>
+    </dl>
+
+    <p class="small mt1">
+      To place this key in escrow, run
+      <code class="nowrap">manage.py export_tenant_key {{ church.schema_name }} --i-am-the-platform-operator</code>.
+      The export is recorded in this church's audit trail.
+    </p>
+
+    <details class="disclosure mt1">
+      <summary>Re-import the key from escrow (break-glass)</summary>
+      <p class="small">
+        Needed after rotating <code>PLATFORM_MASTER_KEY</code> or restoring onto new
+        infrastructure. The key material does not change, so no data is re-encrypted —
+        only the wrapper. A fingerprint mismatch is refused rather than applied.
+      </p>
+      <form method="post" action="{% url 'tenants:church_restore_key' church.pk %}">
+        {% csrf_token %}
+        {% include "partials/form.html" with form=restore_form %}
+        <button type="submit" class="btn btn--danger">Re-wrap this key</button>
+      </form>
+    </details>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Church data</h2>
+  <p class="mb0 measure muted">
+    This console deliberately does not browse a church's volunteers. Their records live
+    in the <code>{{ church.schema_name }}</code> schema, encrypted with that church's own
+    key, and are worked on by their own screening administrators
+    {% if church.url %}at <a href="{{ church.url }}">{{ church.primary_domain.domain }}</a>{% endif %}.
+  </p>
+</div>
+{% endblock %}

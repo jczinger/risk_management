@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Administrators{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Screening administrators</h1>
+    <p class="lede">
+      Everyone here has the same permissions at {{ church_name|default:"this church" }}.
+      Accounts are deactivated rather than deleted, so the audit trail keeps resolving.
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn btn--primary" href="{% url 'accounts:admin_invite' %}">Add an administrator</a>
+  </div>
+</div>
+
+<div class="card card--flush">
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Name</th><th>Email</th><th>Sign-in methods</th>
+          <th>Last signed in</th><th>Status</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for admin in admins %}
+          <tr>
+            <td><strong>{{ admin.get_full_name|default:"—" }}</strong>{% if admin.pk == user.pk %} <span class="badge badge--info">you</span>{% endif %}</td>
+            <td class="small">{{ admin.email }}</td>
+            <td class="pill-row">
+              {% if admin.has_passkey %}<span class="badge badge--ok">Passkey</span>{% endif %}
+              {% if admin.has_totp %}<span class="badge badge--info">Authenticator</span>{% endif %}
+              {% if not admin.has_passkey and not admin.has_totp %}
+                <span class="badge badge--warn">Not yet set up</span>
+              {% endif %}
+            </td>
+            <td class="small nowrap">{{ admin.last_login_at|date:"j M Y, H:i"|default:"Never" }}</td>
+            <td>
+              {% if admin.is_active %}<span class="badge badge--ok">Active</span>
+              {% else %}<span class="badge badge--muted">Inactive</span>{% endif %}
+            </td>
+            <td class="right">
+              {% if admin.pk != user.pk %}
+                <form method="post" action="{% url 'accounts:admin_toggle_active' admin.pk %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn--sm">
+                    {% if admin.is_active %}Deactivate{% else %}Reactivate{% endif %}
+                  </button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="empty"><strong>No administrators</strong>That should not be possible — contact the platform operator.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

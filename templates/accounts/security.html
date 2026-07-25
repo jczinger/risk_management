@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Account security{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Account security</h1>
+    <p class="lede">{{ user.get_full_name }} · {{ user.email }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'accounts:profile' %}">Your details</a>
+  </div>
+</div>
+
+{% if not user.has_passkey %}
+  <div class="callout callout--info">
+    <h3>Add a passkey</h3>
+    <p class="mb0">
+      Passkeys are the primary way into this system: faster than a password and code, and
+      not phishable. Register one on each device you use.
+    </p>
+  </div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head">
+    <h2>Passkeys</h2>
+    <span class="badge {% if user.has_passkey %}badge--ok{% else %}badge--muted{% endif %}">
+      {{ passkeys|length }} registered
+    </span>
+  </div>
+
+  {% if passkeys %}
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr><th>Device</th><th>Added</th><th>Last used</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for passkey in passkeys %}
+            <tr>
+              <td>{{ passkey.label|default:"Unnamed device" }}</td>
+              <td class="small nowrap">{{ passkey.created_at|date:"j M Y" }}</td>
+              <td class="small nowrap">{{ passkey.last_used_at|date:"j M Y, H:i"|default:"Never" }}</td>
+              <td class="right">
+                <form method="post" action="{% url 'accounts:passkey_remove' passkey.pk %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn--sm">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  <div style="padding: 1rem 1.25rem">
+    <div class="field">
+      <label for="passkey-label">Name this device</label>
+      <input type="text" id="passkey-label" placeholder="e.g. work laptop, phone" maxlength="100">
+      <span class="helptext">Optional, but it makes the list above readable later.</span>
+    </div>
+    <button type="button" id="passkey-register" class="btn btn--primary">Register a passkey</button>
+    <div id="passkey-status" class="hidden mt1" role="status" aria-live="polite"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>Authenticator app</h2>
+    <span class="badge {% if user.has_totp %}badge--ok{% else %}badge--muted{% endif %}">
+      {% if user.has_totp %}Set up{% else %}Not set up{% endif %}
+    </span>
+  </div>
+  <div style="padding: 0 1.25rem 1.25rem">
+    {% if user.has_totp %}
+      <p class="muted">
+        Set up {{ user.totp_confirmed_at|date:"j F Y" }}. Required whenever you sign in
+        with a password.
+      </p>
+      <form method="post" action="{% url 'accounts:totp_disable' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn">Remove authenticator app</button>
+      </form>
+    {% else %}
+      <p class="muted">
+        Only needed if you sign in with a password. If you use a passkey, the passkey is
+        already both factors.
+      </p>
+      <a class="btn" href="{% url 'accounts:totp_setup' %}">Set up an authenticator app</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>Password</h2>
+    <span class="badge {% if user.is_passwordless %}badge--info{% else %}badge--muted{% endif %}">
+      {% if user.is_passwordless %}Passkey-only account{% else %}Set{% endif %}
+    </span>
+  </div>
+  <div style="padding: 0 1.25rem 1.25rem">
+    {% if user.is_passwordless %}
+      <p class="muted">
+        This account has no password — a passkey is the only way in, which is the most
+        secure arrangement. You can add a password as a fallback if you want one.
+      </p>
+    {% endif %}
+    <a class="btn" href="{% url 'accounts:password_change' %}">
+      {% if user.is_passwordless %}Add a password{% else %}Change password{% endif %}
+    </a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/passkeys.js' %}"></script>
+<script>
+  document.getElementById("passkey-register").addEventListener("click", function () {
+    window.VMSPasskeys.register({
+      beginUrl: "{% url 'accounts:webauthn_register_begin' %}",
+      finishUrl: "{% url 'accounts:webauthn_register_finish' %}",
+      buttonSelector: "#passkey-register",
+      statusSelector: "#passkey-status",
+      labelSelector: "#passkey-label",
+      fallbackRedirect: "{% url 'accounts:security' %}",
+    });
+  });
+</script>
+{% endblock %}

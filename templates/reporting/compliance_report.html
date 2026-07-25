@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Compliance report{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Compliance report</h1>
+    <p class="lede">
+      {% if department %}{{ department.name }}{% else %}Church-wide{% endif %}
+      · as at {{ as_of|date:"j F Y" }}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="?{% if department %}department={{ department.pk }}&{% endif %}{% if include_inactive %}include_inactive=1&{% endif %}print=1">Printable version</a>
+    <a class="btn btn--primary" href="?{% if department %}department={{ department.pk }}&{% endif %}{% if include_inactive %}include_inactive=1&{% endif %}format=pdf">Download PDF</a>
+  </div>
+</div>
+
+<div class="card">
+  <form class="filters" method="get">
+    <div class="field">
+      <label for="department">Scope</label>
+      <select name="department" id="department">
+        <option value="">Church-wide</option>
+        {% for option in departments %}
+          <option value="{{ option.pk }}" {% if department and option.pk == department.pk %}selected{% endif %}>{{ option.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field field--checkbox" style="align-self:center">
+      <input type="checkbox" name="include_inactive" value="1" id="include_inactive" {% if include_inactive %}checked{% endif %}>
+      <label for="include_inactive">Include past volunteers</label>
+    </div>
+    <div class="field field--go"><button type="submit" class="btn">Update</button></div>
+  </form>
+</div>
+
+<div class="grid grid--4 mb1">
+  <div class="tile"><div class="n">{{ total }}</div><div class="k">Volunteers</div></div>
+  <div class="tile tile--ok"><div class="n">{{ compliant_count }}</div><div class="k">Nothing owed</div></div>
+  <div class="tile {% if non_compliant_count %}tile--danger{% endif %}"><div class="n">{{ non_compliant_count }}</div><div class="k">Action needed</div></div>
+  <div class="tile"><div class="n">{% if compliance_rate is not None %}{{ compliance_rate }}%{% else %}—{% endif %}</div><div class="k">Compliant</div></div>
+</div>
+
+{% include "reporting/_compliance_table.html" %}
+
+<p class="small muted">
+  "Nothing owed" means no overdue and no outstanding requirements as at the date above.
+  Requirements coming due in the next 60 days do not count against compliance — they are
+  the warning ahead of it. Volunteers with no applicable requirements appear as compliant;
+  assign them a role to start their screening.
+</p>
+{% endblock %}

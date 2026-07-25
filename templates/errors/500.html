@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Something went wrong{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>Something went wrong at our end</h1>
+  <p class="measure">
+    The error has been logged. Nothing you were part-way through has been saved, so no record
+    has been left half-changed. Try again, and if it keeps happening tell the platform
+    operator what you were doing.
+  </p>
+  <a class="btn btn--primary" href="/">Back to the dashboard</a>
+</div>
+{% endblock %}

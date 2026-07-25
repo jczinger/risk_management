@@ -1,0 +1,81 @@
+{% load static %}<!doctype html>
+{% comment %}
+Base layout for the church-facing app.
+
+Two chromes share this file: a church's screening admin sees the church nav, and the
+platform super-admin sees the console nav (base_console.html overrides the nav block).
+
+Assets are served locally — htmx included — rather than from a CDN. That is partly the
+data-residency constraint and partly that a compliance tool should not stop working
+because a third-party host is down.
+{% endcomment %}
+<html lang="en-CA">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Volunteer Management{% endblock %}{% if church_name %} · {{ church_name }}{% endif %}</title>
+  <link rel="stylesheet" href="{% static 'css/vms.css' %}">
+  <script src="{% static 'js/htmx.min.js' %}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body{% block body_attrs %}{% endblock %}>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="shell">
+  <header class="topbar">
+    <span class="brand{% block brand_class %}{% endblock %}">
+      <a href="{% block brand_url %}/{% endblock %}">VMS</a>
+      {% if church_name %}<span class="church">{{ church_name }}</span>{% endif %}
+    </span>
+    <span class="spacer"></span>
+    {% if user.is_authenticated %}
+      <span class="who">{{ user.get_full_name|default:user.get_username }}</span>
+      <a href="{% url 'accounts:security' %}">Account</a>
+      <form method="post" action="{% url 'accounts:logout' %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit" class="btn btn--sm">Sign out</button>
+      </form>
+    {% else %}
+      <a href="{% url 'accounts:login' %}">Sign in</a>
+    {% endif %}
+  </header>
+
+  {% if user.is_authenticated %}
+    <nav class="nav" aria-label="Main">
+      {% block nav %}
+        <a href="/" {% if nav == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+        <a href="{% url 'org:volunteer_list' %}" {% if nav == 'volunteers' %}class="active"{% endif %}>Volunteers</a>
+        <a href="{% url 'org:department_list' %}" {% if nav == 'departments' %}class="active"{% endif %}>Departments</a>
+        <a href="{% url 'org:role_list' %}" {% if nav == 'roles' %}class="active"{% endif %}>Roles</a>
+        <a href="{% url 'requirements:definition_list' %}" {% if nav == 'requirements' %}class="active"{% endif %}>Requirements</a>
+        <a href="{% url 'documents:list' %}" {% if nav == 'documents' %}class="active"{% endif %}>Documents</a>
+        <a href="{% url 'reporting:compliance' %}" {% if nav == 'reports' %}class="active"{% endif %}>Reports</a>
+        <a href="{% url 'reporting:audit_trail' %}" {% if nav == 'audit' %}class="active"{% endif %}>Audit trail</a>
+        <a href="{% url 'accounts:admin_list' %}" {% if nav == 'admins' %}class="active"{% endif %}>Administrators</a>
+      {% endblock %}
+    </nav>
+  {% endif %}
+
+  <main id="main" {% block main_class %}{% endblock %}>
+    {% if messages %}
+      <ul class="messages">
+        {% for message in messages %}
+          <li class="{{ message.tags }}">{{ message }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site">
+    Volunteer Management System
+    {% if vms_debug %} · <strong>development mode</strong>{% endif %}
+    · Personal information in this system is encrypted and access is logged.
+  </footer>
+</div>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

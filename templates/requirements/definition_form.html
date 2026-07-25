@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{% if definition %}Edit {{ definition.name }}{% else %}Add a requirement{% endif %}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{% if definition %}Edit requirement{% else %}Add a requirement{% endif %}</h1>
+    <p class="lede">
+      Requirements are per-church and fully customisable. Anything your policy asks for
+      that is not in the standard template can be added here as a custom requirement.
+    </p>
+  </div>
+</div>
+
+{% if definition %}
+  <div class="callout callout--info">
+    <p class="mb0">
+      Edits apply going forward. Requirements volunteers have already completed keep the
+      dates they were recorded with — changing the cadence changes when the next renewal
+      falls due, not the history.
+    </p>
+  </div>
+{% endif %}
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">Save</button>
+      <a class="btn" href="{% if definition %}{% url 'requirements:definition_detail' definition.pk %}{% else %}{% url 'requirements:definition_list' %}{% endif %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<div class="callout callout--muted">
+  <h3>Do not paste policy text here</h3>
+  <p class="mb0">
+    Plan to Protect material is licensed. Use the appendix reference field to point at
+    your policy manual, and keep descriptions to instructions for your own admins.
+  </p>
+</div>
+{% endblock %}

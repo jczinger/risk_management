@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ volunteer.display_name }} — no longer serving{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Mark {{ volunteer.display_name }} as no longer serving</h1>
+  </div>
+</div>
+
+<div class="callout callout--info">
+  <h3>This is not a deletion</h3>
+  <p class="mb0">
+    Volunteer records are retained permanently — the Plan to Protect policy requires it,
+    and so does the law for records involving minors. This marks them as not currently
+    serving and, if you choose, ends their role assignments. Their screening history,
+    criminal record checks and documents all stay on file, and you can return them to
+    service later.
+  </p>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--danger">Mark as no longer serving</button>
+      <a class="btn" href="{% url 'org:volunteer_detail' volunteer.pk %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

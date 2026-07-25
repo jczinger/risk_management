@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ document.title }}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ document.title }}</h1>
+    <p class="lede">
+      <a href="{% url 'org:volunteer_detail' document.volunteer.pk %}">{{ document.volunteer.display_name }}</a>
+      · {{ document.get_kind_display }}
+    </p>
+  </div>
+  <div class="actions">
+    {% if document.has_file %}
+      <a class="btn btn--primary" href="{% url 'documents:download' document.pk %}">Open the file</a>
+    {% elif document.external_url %}
+      <a class="btn btn--primary" href="{{ document.external_url }}" rel="noopener noreferrer" target="_blank">Open in external store</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <dl class="facts">
+    <dt>Held as</dt>
+    <dd>
+      {% if document.mode == "store" %}<span class="badge badge--ok">Encrypted file in this system</span>
+      {% elif document.mode == "link" %}<span class="badge badge--info">Link to an external store</span>
+      {% else %}<span class="badge badge--muted">Hard copy tracked only</span>{% endif %}
+    </dd>
+    <dt>Document date</dt><dd>{{ document.document_date|date:"j F Y"|default:"—" }}</dd>
+    {% if document.mode == "store" and document.has_file %}
+      <dt>Original filename</dt><dd>{{ document.original_filename|default:"—" }}</dd>
+      <dt>Type</dt><dd>{{ document.content_type|default:"—" }}</dd>
+      <dt>Size</dt><dd>{{ document.byte_size|filesizeformat }}</dd>
+      <dt>Integrity hash</dt><dd class="mono tiny">{{ document.plaintext_sha256 }}</dd>
+    {% endif %}
+    {% if document.external_url %}
+      <dt>Link</dt><dd class="small"><a href="{{ document.external_url }}" rel="noopener noreferrer" target="_blank">{{ document.external_url|truncatechars:70 }}</a></dd>
+    {% endif %}
+    {% if document.physical_location %}
+      <dt>Filed at</dt><dd>{{ document.physical_location }}</dd>
+    {% endif %}
+    {% if document.requirement_instance %}
+      <dt>Requirement</dt>
+      <dd><a href="{% url 'requirements:instance_detail' document.requirement_instance.pk %}">{{ document.requirement_instance.definition.name }}</a></dd>
+    {% endif %}
+    {% if document.crc_record %}
+      <dt>Criminal record check</dt>
+      <dd><a href="{% url 'requirements:crc_detail' document.crc_record.pk %}">{{ document.crc_record.report_date|date:"j F Y" }}</a></dd>
+    {% endif %}
+    <dt>Recorded</dt>
+    <dd>{{ document.created_at|date:"j F Y, H:i" }}{% if document.uploaded_by %} by {{ document.uploaded_by }}{% endif %}</dd>
+    <dt>Current</dt>
+    <dd>
+      {% if document.is_current %}Yes
+      {% else %}Superseded{% if document.superseded_by %} by <a href="{% url 'documents:detail' document.superseded_by.pk %}">a later version</a>{% endif %}{% endif %}
+    </dd>
+  </dl>
+
+  {% if document.notes %}
+    <h3 class="mt2">Notes</h3>
+    <p class="small mb0">{{ document.notes|linebreaksbr }}</p>
+  {% endif %}
+</div>
+
+<p class="small muted">
+  Documents are retained permanently along with the volunteer's file. Opening a stored file
+  writes an entry to the audit trail.
+</p>
+{% endblock %}

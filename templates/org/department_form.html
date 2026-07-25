@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{% if department %}Edit {{ department.name }}{% else %}Add a department{% endif %}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div><h1>{% if department %}Edit {{ department.name }}{% else %}Add a department{% endif %}</h1></div>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">Save</button>
+      <a class="btn" href="{% if department %}{% url 'org:department_detail' department.pk %}{% else %}{% url 'org:department_list' %}{% endif %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% if department %}
+  <p class="small muted">
+    Departments cannot be deleted — a volunteer's history refers to them. Deactivating one
+    hides it from pickers while keeping everything on file.
+  </p>
+{% endif %}
+{% endblock %}

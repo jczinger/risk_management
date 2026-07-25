@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Your details{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Your details</h1>
+    <p class="lede">Your email address is encrypted at rest and used to sign in and to receive renewal reminders.</p>
+  </div>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <button type="submit" class="btn btn--primary">Save</button>
+    <a class="btn" href="{% url 'accounts:security' %}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

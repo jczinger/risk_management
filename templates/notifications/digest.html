@@ -1,0 +1,72 @@
+{% comment %}
+The daily reminder digest.
+
+Deliberately plain HTML with inline styles: this has to survive Outlook, which ignores
+stylesheets, strips classes and does not do flexbox. Tables and inline styles are the only
+things that render consistently.
+{% endcomment %}
+<div style="font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 15px; color: #16202c; line-height: 1.5; max-width: 640px;">
+
+  <h2 style="margin: 0 0 4px; font-size: 19px; color: #14496b;">Volunteer screening reminders</h2>
+  <p style="margin: 0 0 20px; color: #4a5a6b; font-size: 14px;">
+    {{ church_name }} &middot; {{ as_of|date:"l j F Y" }}
+  </p>
+
+  {% if overdue %}
+    <h3 style="margin: 0 0 8px; font-size: 15px; color: #a4243b; text-transform: uppercase; letter-spacing: 0.04em;">
+      Overdue ({{ overdue|length }})
+    </h3>
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse: collapse; margin-bottom: 24px;">
+      {% for entry in overdue %}
+        <tr>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #eef2f7; border-left: 3px solid #a4243b; background: #fbeef0;">
+            <strong>{{ entry.instance.volunteer.sort_name }}</strong><br>
+            <span style="font-size: 14px;">{{ entry.instance.definition.name }}</span><br>
+            <span style="font-size: 13px; color: #a4243b;">Was due {{ entry.due_date|date:"j M Y" }}</span>
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+
+  {% if upcoming %}
+    <h3 style="margin: 0 0 8px; font-size: 15px; color: #8a5a00; text-transform: uppercase; letter-spacing: 0.04em;">
+      Coming due ({{ upcoming|length }})
+    </h3>
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse: collapse; margin-bottom: 24px;">
+      {% for entry in upcoming %}
+        <tr>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #eef2f7; border-left: 3px solid #8a5a00; background: #fdf4e3;">
+            <strong>{{ entry.instance.volunteer.sort_name }}</strong><br>
+            <span style="font-size: 14px;">{{ entry.instance.definition.name }}</span><br>
+            <span style="font-size: 13px; color: #8a5a00;">
+              Due {{ entry.due_date|date:"j M Y" }} — {{ entry.lead_days }} day{{ entry.lead_days|pluralize }} from now
+            </span>
+            {% if entry.kind == "turning_18" %}
+              <br><span style="font-size: 13px; color: #14496b;">
+                Criminal record check now required — this volunteer has turned 18.
+              </span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+
+  {% if dashboard_url %}
+    <p style="margin: 0 0 24px;">
+      <a href="{{ dashboard_url }}" style="display: inline-block; padding: 10px 18px; background: #1c5f8b; color: #ffffff; text-decoration: none; border-radius: 5px; font-weight: 600;">
+        Open the dashboard
+      </a>
+    </p>
+  {% endif %}
+
+  <hr style="border: 0; border-top: 1px solid #dbe3ec; margin: 24px 0 12px;">
+  <p style="margin: 0 0 8px; font-size: 12px; color: #7a8899;">
+    The daily summary of screening requirements coming due or overdue at {{ church_name }}.
+    It goes to screening administrators only — this system never emails volunteers.
+  </p>
+  <p style="margin: 0; font-size: 12px; color: #7a8899;">
+    Reminder timing is set per church by the platform operator.
+  </p>
+</div>

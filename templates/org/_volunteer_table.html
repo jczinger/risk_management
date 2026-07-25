@@ -1,0 +1,88 @@
+{% comment %}
+The volunteer table. Rendered standalone for HTMX filter requests and included by
+volunteer_list.html for the full page.
+{% endcomment %}
+
+<div class="card card--flush">
+  <div class="card-head">
+    <h2>{{ total }} volunteer{{ total|pluralize }}</h2>
+    {% if status == "all" %}<span class="badge badge--muted">Including past volunteers</span>{% endif %}
+  </div>
+
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Roles</th>
+          <th>Age</th>
+          <th class="num">Outstanding</th>
+          <th>Standing</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for volunteer in volunteers %}
+          <tr>
+            <td>
+              <a href="{% url 'org:volunteer_detail' volunteer.pk %}"><strong>{{ volunteer.sort_name }}</strong></a>
+              {% if volunteer.preferred_name %}<div class="row-note">known as {{ volunteer.preferred_name }}</div>{% endif %}
+            </td>
+            <td class="small">
+              {% for assignment in volunteer.current_assignments %}
+                <div>
+                  {{ assignment.role.department.name }} → {{ assignment.role.name }}
+                  {% if assignment.role.is_leadership %}<span class="badge badge--info">{{ assignment.role.get_leadership_display }}</span>{% endif %}
+                </div>
+              {% empty %}
+                <span class="faint">No current role</span>
+              {% endfor %}
+            </td>
+            <td class="small nowrap">
+              {% if volunteer.age is not None %}
+                {{ volunteer.age }}
+                {% if volunteer.is_minor %}<span class="badge badge--info">Under 18</span>{% endif %}
+              {% else %}
+                <span class="badge badge--warn" title="Needed to apply the age rules">No DOB</span>
+              {% endif %}
+            </td>
+            <td class="num">
+              {% if volunteer.outstanding %}<strong>{{ volunteer.outstanding }}</strong>{% else %}<span class="faint">0</span>{% endif %}
+            </td>
+            <td>
+              {% if volunteer.is_permanently_disqualified %}
+                <span class="badge badge--danger">Disqualified</span>
+              {% elif volunteer.is_blocked %}
+                <span class="badge badge--danger">{{ volunteer.get_screening_block_display }}</span>
+              {% elif not volunteer.is_active %}
+                <span class="badge badge--muted">No longer serving</span>
+              {% elif volunteer.outstanding %}
+                <span class="badge badge--warn">{{ volunteer.outstanding }} outstanding</span>
+              {% else %}
+                <span class="badge badge--ok">Nothing owed</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5" class="empty">
+            <strong>No volunteers match</strong>
+            Try widening the filters, or add a volunteer to get started.
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if page.has_other_pages %}
+    <div class="pager">
+      {% if page.has_previous %}
+        <a class="btn btn--sm" hx-get="?page={{ page.previous_page_number }}" hx-target="#volunteer-results"
+           href="?page={{ page.previous_page_number }}">Previous</a>
+      {% endif %}
+      <span class="small muted">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+      {% if page.has_next %}
+        <a class="btn btn--sm" hx-get="?page={{ page.next_page_number }}" hx-target="#volunteer-results"
+           href="?page={{ page.next_page_number }}">Next</a>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

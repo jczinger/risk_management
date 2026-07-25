@@ -1,0 +1,58 @@
+{% extends "base_console.html" %}
+{% block console_title %}Encryption key · {{ church.name }}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block head %}
+  {# Nothing here should ever be cached or indexed. #}
+  <meta name="referrer" content="no-referrer">
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ church.name }} is provisioned</h1>
+    <p class="lede">Schema <code>{{ church.schema_name }}</code> created, requirements seeded, first administrator added.</p>
+  </div>
+</div>
+
+<div class="callout callout--permanent">
+  <h3>Data encryption key — shown once</h3>
+  <p>
+    This key decrypts {{ church.name }}'s volunteer personal information. Put it in
+    Keeper Security now, filed under the church's name and the fingerprint below.
+    Once you leave this page it cannot be shown here again.
+  </p>
+  <div class="keybox">{{ dek_b64 }}</div>
+  <dl class="facts">
+    <dt>Fingerprint</dt><dd class="mono">{{ fingerprint }}</dd>
+    <dt>Church</dt><dd>{{ church.name }}</dd>
+    <dt>Short code</dt><dd class="mono">{{ church.schema_name }}</dd>
+  </dl>
+  <p class="small mt1 mb0">
+    If it is lost, it can still be recovered while <code>PLATFORM_MASTER_KEY</code> is
+    intact, with <code class="nowrap">manage.py export_tenant_key {{ church.schema_name }}</code>.
+    That command writes an entry into the church's own audit trail.
+  </p>
+</div>
+
+<div class="card">
+  <h2>What happens next</h2>
+  <ol class="stack">
+    <li>
+      The first administrator signs in at
+      {% with domain=church.primary_domain %}
+        {% if domain %}<code>https://{{ domain.domain }}/</code>{% else %}<em>no hostname configured</em>{% endif %}
+      {% endwith %}
+    </li>
+    <li>
+      They are held at a mandatory key-backup step until they confirm they have saved
+      their own offline copy. They cannot reach the rest of the system before that.
+    </li>
+    <li>They set up departments and roles, then start onboarding volunteers.</li>
+  </ol>
+</div>
+
+<div class="btn-row">
+  <a class="btn btn--primary" href="{% url 'tenants:church_detail' church.pk %}">I have saved the key — continue</a>
+</div>
+{% endblock %}

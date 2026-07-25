@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% comment %}
+The screening admin's home page: the three-bucket renewal view (Build Spec §7).
+
+Filters are HTMX-driven and swap only the bucket panel, so narrowing to one department is
+instant rather than a page load.
+{% endcomment %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Compliance dashboard</h1>
+    <p class="lede">
+      {{ church_name }} · {{ today|date:"l j F Y" }}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'reporting:compliance' %}">Compliance report</a>
+    <a class="btn btn--primary" href="{% url 'org:volunteer_create' %}">Add a volunteer</a>
+  </div>
+</div>
+
+{% if headline.active_volunteers == 0 %}
+  <div class="callout callout--info">
+    <h3>Getting started</h3>
+    <ol class="mb0">
+      <li><a href="{% url 'org:department_create' %}">Add your departments</a> — the ministry areas volunteers serve in.</li>
+      <li><a href="{% url 'org:role_create' %}">Add roles</a> to each department, and set the position-of-trust and personal-information flags.</li>
+      <li><a href="{% url 'requirements:definition_list' %}">Review your requirements</a> — 14 are already set up from the Plan to Protect template.</li>
+      <li><a href="{% url 'org:volunteer_create' %}">Add your first volunteer</a> and assign them a role. Their requirements appear automatically.</li>
+    </ol>
+  </div>
+{% endif %}
+
+<div class="grid grid--4 mb1">
+  <div class="tile">
+    <div class="n">{{ headline.serving }}</div>
+    <div class="k">Currently serving</div>
+  </div>
+  <div class="tile {% if headline.unassigned %}tile--warn{% endif %}">
+    <div class="n">{{ headline.unassigned }}</div>
+    <div class="k">No current role</div>
+  </div>
+  <div class="tile {% if headline.blocked %}tile--danger{% endif %}">
+    <div class="n">{{ headline.blocked }}</div>
+    <div class="k">Blocked</div>
+  </div>
+  <div class="tile">
+    <div class="n">{{ headline.minors }}</div>
+    <div class="k">Under 18</div>
+  </div>
+</div>
+
+<div class="card">
+  <form class="filters filter-form"
+        hx-get="{% url 'dashboard' %}"
+        hx-target="#dashboard-buckets"
+        hx-swap="innerHTML"
+        hx-trigger="submit, change from:select"
+        hx-indicator="#dash-spinner">
+    {% for field in form.visible_fields %}
+      <div class="field">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+      </div>
+    {% endfor %}
+    <div class="field field--go"><button type="submit" class="btn">Filter</button></div>
+    <div class="field field--go"><span id="dash-spinner" class="htmx-indicator small muted">Updating…</span></div>
+  </form>
+</div>
+
+<div id="dashboard-buckets">
+  {% include "reporting/_dashboard_buckets.html" %}
+</div>
+
+{% if departments %}
+  <div class="card card--flush">
+    <div class="card-head">
+      <h2>By department</h2>
+      <a class="btn btn--sm" href="{% url 'reporting:compliance' %}">Full report</a>
+    </div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>Department</th><th class="num">Volunteers</th>
+            <th class="num">Overdue</th><th class="num">Coming due</th>
+            <th class="num">In progress</th><th class="num">Satisfied</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in departments %}
+            <tr>
+              <td><a href="{% url 'org:department_detail' row.department.pk %}"><strong>{{ row.department.name }}</strong></a></td>
+              <td class="num">{{ row.volunteers }}</td>
+              <td class="num">{% if row.overdue %}<strong style="color:var(--danger)">{{ row.overdue }}</strong>{% else %}<span class="faint">0</span>{% endif %}</td>
+              <td class="num">{% if row.due_soon %}<strong style="color:var(--warn)">{{ row.due_soon }}</strong>{% else %}<span class="faint">0</span>{% endif %}</td>
+              <td class="num">{{ row.outstanding }}</td>
+              <td class="num faint">{{ row.satisfied }}</td>
+              <td class="right"><a class="btn btn--sm" href="{% url 'reporting:compliance' %}?department={{ row.department.pk }}">Report</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

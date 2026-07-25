@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% comment %}
+Recording a conviction against a Not Clear result.
+
+This is the most consequential form in the system. Choosing an automatic category
+permanently bars the person from every position of trust with no route back, so the page
+states that plainly *before* the choice, and the acknowledgement checkbox is a deliberate
+speed bump rather than decoration.
+{% endcomment %}
+
+{% block title %}Record a conviction{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Record a conviction</h1>
+    <p class="lede">
+      Against the check dated {{ record.report_date|date:"j F Y" }} for
+      <a href="{% url 'org:volunteer_detail' volunteer.pk %}">{{ volunteer.display_name }}</a>
+    </p>
+  </div>
+</div>
+
+<div class="callout callout--permanent">
+  <h3>Read this before choosing a category</h3>
+  <p>
+    The policy divides convictions into two kinds, and the difference is not a matter of
+    judgement here — it decides what the system does next.
+  </p>
+  <p class="mb0">
+    <strong>Automatic disqualifiers</strong> permanently bar this person from every position
+    of trust. Their current assignments end immediately, and <strong>there is no override —
+    not by you, not by leadership, not by the platform operator.</strong> The categories are:
+  </p>
+  <ul class="small mt1 mb0">
+    {% for value, label in automatic_categories %}<li>{{ label }}</li>{% endfor %}
+  </ul>
+</div>
+
+<div class="callout callout--warning">
+  <p class="mb0">
+    <strong>Discretionary red flags</strong> — anything else — go to a leadership decision.
+    That decision must record the reasoning and the mitigation steps, and is retained
+    permanently.
+  </p>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--danger">Record this conviction</button>
+      <a class="btn" href="{% url 'requirements:crc_detail' record.pk %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<p class="small muted">
+  Record one conviction at a time; add more from the check's page. The details you type are
+  encrypted with your church's key. A recorded conviction cannot be deleted — it forms part
+  of the permanent screening record.
+</p>
+{% endblock %}

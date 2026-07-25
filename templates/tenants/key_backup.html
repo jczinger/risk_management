@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% comment %}
+The mandatory gate a new church passes through before it can use the system.
+
+ForceKeyBackupMiddleware redirects every authenticated request here until the
+confirmation is recorded, so this page has to explain *why* rather than just demand a
+checkbox — an admin who does not understand the stakes will paste the key into an email
+to themselves and defeat the point.
+{% endcomment %}
+
+{% block title %}Save your encryption key{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+{% block nav %}{% endblock %}
+
+{% block head %}<meta name="referrer" content="no-referrer">{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Before you start: save your encryption key</h1>
+    <p class="lede">
+      One step, once. {{ church.name }}'s volunteer records are encrypted, and this is
+      the key. You need your own copy of it kept somewhere safe.
+    </p>
+  </div>
+</div>
+
+<div class="callout callout--permanent">
+  <h3>Your data encryption key</h3>
+  <div class="keybox">{{ dek_b64 }}</div>
+  <div class="btn-row">
+    <a class="btn" href="{% url 'tenants:key_backup_download' %}" download>Download as a text file</a>
+  </div>
+  <dl class="facts mt1">
+    <dt>Fingerprint</dt><dd class="mono">{{ fingerprint }}</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2>Where to put it</h2>
+  <p><strong>Good places:</strong></p>
+  <ul>
+    <li>A password manager your church already uses — as a secure note.</li>
+    <li>Printed and kept in a locked cabinet or safe with your other sensitive records.</li>
+    <li>On an encrypted USB drive stored off-site.</li>
+  </ul>
+  <p><strong>Not these:</strong></p>
+  <ul>
+    <li>An email to yourself, or any shared mailbox.</li>
+    <li>A shared drive, a chat message, or a document anyone at the church can open.</li>
+    <li>A sticky note on the monitor.</li>
+  </ul>
+  <p class="muted mb0">
+    Think of it the way you would a master password. Anyone with both this key and a copy
+    of the database could read your volunteers' personal information — which is exactly
+    why the information is encrypted in the first place.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Confirm</h2>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <button type="submit" class="btn btn--primary btn--lg">I have saved the key — continue</button>
+  </form>
+</div>
+
+<p class="small muted">
+  The platform operator also holds a copy in escrow, so a lost key does not mean lost
+  records. That is a deliberate trade-off: it guarantees your church cannot lose its own
+  data, and it means the operator could technically decrypt it. Every time that escrow
+  copy is exported, an entry appears in your audit trail.
+</p>
+{% endblock %}

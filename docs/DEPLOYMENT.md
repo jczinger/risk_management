@@ -1,0 +1,289 @@
+# Deploying VMS
+
+From a clean host to a working system behind Nginx Proxy Manager. Assumes Debian or Ubuntu with
+Docker and the Compose plugin; adjust package commands for other distributions.
+
+---
+
+## 1. What you need first
+
+| Thing | Notes |
+|---|---|
+| A host with Docker + Compose plugin | 2 vCPU / 4 GB RAM is comfortable for the district |
+| A domain | e.g. `vms.example.ca`, with a wildcard `*.vms.example.ca` |
+| Nginx Proxy Manager | Already running, terminating SSL |
+| Keeper Security access | For the master key and each church's escrowed key |
+| An ACS Email resource | Canada geography, with SPF/DKIM/DMARC on the domain |
+
+**DNS.** Two records, both pointing at the host:
+
+```
+vms.example.ca        A     <host IP>
+*.vms.example.ca      A     <host IP>
+```
+
+The wildcard is what lets each church have its own subdomain without a DNS change per church.
+
+---
+
+## 2. Get the code
+
+```bash
+sudo mkdir -p /var/www
+sudo chown "$USER" /var/www
+git clone git@github.com:jczinger/risk_management.git /var/www/risk_management
+cd /var/www/risk_management
+```
+
+---
+
+## 3. Configure
+
+```bash
+cp .env.example .env
+```
+
+Generate both keys:
+
+```bash
+docker compose run --rm --no-deps web python manage.py generate_key --secret-key
+```
+
+> ### Stop here and back up the master key
+>
+> `PLATFORM_MASTER_KEY` wraps every church's data-encryption key. If it is lost, every encrypted
+> field in the system becomes unreadable — dates of birth, addresses, phone numbers, notes,
+> uploaded documents. Restoring a database backup will not help, because the backup deliberately
+> does not contain it.
+>
+> Put it in Keeper Security **now**, before provisioning any church.
+
+Then edit `.env`:
+
+```ini
+DJANGO_SETTINGS_MODULE=config.settings.prod
+DJANGO_SECRET_KEY=<from generate_key --secret-key>
+DEBUG=False
+
+# Keep `localhost` — the container's own health check probes over the internal network.
+ALLOWED_HOSTS=vms.example.ca,.vms.example.ca,localhost
+CSRF_TRUSTED_ORIGINS=https://vms.example.ca,https://firstoac.vms.example.ca
+VMS_BASE_DOMAIN=vms.example.ca
+VMS_HTTP_PORT=8020
+
+PLATFORM_MASTER_KEY=<from generate_key>
+
+POSTGRES_DB=vms
+POSTGRES_USER=vms
+POSTGRES_PASSWORD=<a long random password>
+
+REDIS_URL=redis://redis:6379/0
+TZ=America/Vancouver
+VMS_NIGHTLY_HOUR=2
+
+EMAIL_PROVIDER=smtp
+EMAIL_HOST=smtp.azurecomm.net
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=<acs-resource>.<entra-app-id>.<entra-tenant-id>
+EMAIL_HOST_PASSWORD=<entra app client secret>
+DEFAULT_FROM_EMAIL=no-reply@vms.example.ca
+```
+
+`CSRF_TRUSTED_ORIGINS` needs an entry per hostname that submits forms. Add each church's
+subdomain as you onboard it, then `docker compose up -d web` to pick it up.
+
+```bash
+chmod 600 .env
+```
+
+### A note on `ALLOWED_HOSTS`
+
+Django rejects an unlisted hostname before any middleware runs, so `localhost` must be present or
+the container health check fails and Docker will keep restarting a healthy `web`. The leading-dot
+form `.vms.example.ca` matches every subdomain, which is what makes onboarding a church a
+zero-config operation.
+
+---
+
+## 4. Start it
+
+```bash
+docker compose up -d
+docker compose ps
+```
+
+You should see `db` and `redis` healthy, `migrate` exited 0, and `web`, `worker` and `beat`
+running. The `migrate` service applies migrations to the public schema and every existing church
+before the app starts, so a redeploy needs nothing special.
+
+```bash
+curl -s localhost:8020/healthz/     # {"status": "ok"}
+docker compose logs migrate         # confirm the migrations applied
+```
+
+---
+
+## 5. Create the super-admin
+
+```bash
+docker compose exec web python manage.py bootstrap_superadmin \
+    --email you@example.ca \
+    --first-name Your --last-name Name \
+    --password '<a strong password>'
+```
+
+This also creates the registry row and hostname for the platform itself. It is safe to re-run.
+
+Omit `--password` for a passkey-only operator account — more secure, but you will need a passkey
+registered before you can sign in at all, so set a password on the first run and add a passkey
+afterwards.
+
+---
+
+## 6. Point Nginx Proxy Manager at it
+
+Two proxy hosts, both forwarding to `127.0.0.1:8020` (or the host's Docker bridge address):
+
+**Platform console**
+- Domain: `vms.example.ca`
+- Scheme `http`, forward host `127.0.0.1`, port `8020`
+- Block common exploits: on
+- Websockets: not needed
+- SSL: request a certificate, force SSL, HTTP/2, HSTS on
+
+**Churches (wildcard)**
+- Domain: `*.vms.example.ca`
+- Same forwarding
+- SSL: a wildcard certificate via DNS-01 (Let's Encrypt cannot issue a wildcard over HTTP-01)
+
+Nginx Proxy Manager sets `X-Forwarded-Proto` by default, which is what tells Django the browser
+used HTTPS — `SECURE_PROXY_SSL_HEADER` in the settings honours it. Without that header, secure
+cookies and the WebAuthn origin check both misbehave.
+
+Confirm end to end:
+
+```bash
+curl -I https://vms.example.ca/accounts/login/     # 200
+curl -I https://vms.example.ca/healthz/            # 200
+```
+
+---
+
+## 7. Onboard the first church
+
+Either from the console at `https://vms.example.ca/`, or on the command line:
+
+```bash
+docker compose exec web python manage.py provision_church \
+    --name "First OAC" \
+    --code firstoac \
+    --admin-email josh.czinger@shiftit.ca \
+    --admin-first-name Josh --admin-last-name Czinger \
+    --admin-password '<temporary password>'
+```
+
+This creates the schema, generates the church's encryption key, adds the first screening
+administrator, and seeds the 14 Plan to Protect requirements.
+
+**The command prints the church's encryption key once.** Copy it into Keeper Security under the
+church's name and the fingerprint shown. If you lose it, it is still recoverable while the master
+key is intact (`manage.py export_tenant_key`), but escrow it now rather than relying on that.
+
+Add the new subdomain to `CSRF_TRUSTED_ORIGINS` in `.env` and restart `web`:
+
+```bash
+docker compose up -d web
+```
+
+The church's admin signs in at `https://firstoac.vms.example.ca/` and is held at a mandatory
+key-backup step until they confirm they have saved their own offline copy.
+
+---
+
+## 8. Set up backups
+
+The script dumps the database and the encrypted media volume, and writes a manifest with each
+church's key fingerprint.
+
+```bash
+sudo mkdir -p /var/backups/vms
+sudo chown "$USER" /var/backups/vms
+
+VMS_BACKUP_DIR=/var/backups/vms ./scripts/backup.sh
+```
+
+Nightly, via cron:
+
+```cron
+30 2 * * * cd /var/www/risk_management && VMS_BACKUP_DIR=/var/backups/vms VMS_KEEP_DAYS=30 ./scripts/backup.sh >> /var/log/vms-backup.log 2>&1
+```
+
+Then get those backups **off this host** — the whole point is surviving the loss of this machine.
+
+**Rehearse the restore.** A backup you have never restored is a hypothesis. See
+[`OPERATIONS.md`](OPERATIONS.md#restoring-from-a-backup).
+
+---
+
+## 9. Confirm it all works
+
+```bash
+docker compose exec web python manage.py verify_keys
+```
+
+Every church should report OK — that confirms the key unwraps *and* that real stored data
+decrypts, which a row count alone would not.
+
+Then, by hand:
+
+1. Sign in to the console; the church is listed.
+2. Sign in as the church admin; the key-backup gate appears; confirm it.
+3. Add a department and a role; add a volunteer; assign the role — their requirements appear.
+4. Register a passkey from **Account → Security**, sign out, and sign back in with it.
+5. Open **Reports → Compliance report** and download the PDF.
+
+---
+
+## 10. Upgrading
+
+```bash
+cd /var/www/risk_management
+VMS_BACKUP_DIR=/var/backups/vms ./scripts/backup.sh   # always first
+git pull
+docker compose build
+docker compose up -d
+docker compose logs migrate
+```
+
+The `migrate` service runs before the app comes up, so migrations are applied to the public
+schema and every church automatically.
+
+---
+
+## Troubleshooting
+
+**404 on every page, health check fine.** The hostname has no `Domain` row. Unknown hostnames are
+refused on purpose. Check the church's hostname in the console, and that DNS resolves.
+
+**400 Bad Request.** The hostname is not in `ALLOWED_HOSTS`.
+
+**CSRF verification failed.** The submitting hostname is missing from `CSRF_TRUSTED_ORIGINS`
+(scheme included, e.g. `https://firstoac.vms.example.ca`), or the proxy is not forwarding
+`X-Forwarded-Proto`.
+
+**`web` restarts repeatedly.** `docker compose logs web`. Most often a settings guard refusing to
+boot: a missing `PLATFORM_MASTER_KEY`, an empty `ALLOWED_HOSTS`, or a `DJANGO_SECRET_KEY` under 50
+characters. Failing loudly is deliberate — the alternative is a system that appears to work while
+storing recoverable plaintext.
+
+**Passkeys will not register.** WebAuthn requires a secure context. Confirm the page is served
+over HTTPS and that `WEBAUTHN_RP_ID` is the base domain (not a subdomain, and no scheme or port).
+
+**Reminder emails are not arriving.** Check **Reports → Reminder emails** for the delivery log
+with any provider error. Then confirm `EMAIL_PROVIDER=smtp`, that the ACS credentials are right,
+and that `DEFAULT_FROM_EMAIL` is a verified sender on the ACS domain.
+
+**PDF export returns HTML.** WeasyPrint's system libraries are missing. They are in the image, so
+this only happens outside Docker; install `libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b
+libcairo2 libgdk-pixbuf-2.0-0`.

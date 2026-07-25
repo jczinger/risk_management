@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.coverage
+htmlcov
+media
+staticfiles
+backups
+celerybeat-schedule*
+*.md
+!BUILD_NOTES.md

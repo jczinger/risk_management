@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ definition.name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ definition.name }}</h1>
+    <p class="lede">
+      {{ definition.get_requirement_type_display }} · {{ definition.cadence_display }}
+      {% if definition.appendix_reference %} · {{ definition.appendix_reference }}{% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'requirements:definition_edit' definition.pk %}">Edit</a>
+    <form method="post" action="{% url 'requirements:definition_toggle_active' definition.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="btn">{% if definition.is_active %}Deactivate{% else %}Reactivate{% endif %}</button>
+    </form>
+  </div>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <h2>Configuration</h2>
+    <dl class="facts">
+      <dt>Type</dt><dd>{{ definition.get_requirement_type_display }}</dd>
+      <dt>How often</dt><dd>{{ definition.cadence_display }}</dd>
+      <dt>Applies to</dt>
+      <dd>
+        {{ definition.get_applies_to_display }}
+        {% if definition.applies_to == "specific" %}
+          <div class="small">{% for role in definition.roles.all %}{{ role.department.name }} → {{ role.name }}{% if not forloop.last %}<br>{% endif %}{% endfor %}</div>
+        {% endif %}
+      </dd>
+      <dt>Age rule</dt><dd>{{ definition.get_age_rule_display }}</dd>
+      <dt>Order</dt><dd>{{ definition.sequence }}{% if definition.is_onboarding %} · part of onboarding{% endif %}</dd>
+      <dt>Depends on</dt>
+      <dd>{% if definition.must_follow %}<a href="{% url 'requirements:definition_detail' definition.must_follow.pk %}">{{ definition.must_follow.name }}</a>{% else %}<span class="faint">Nothing</span>{% endif %}</dd>
+      <dt>Document expected</dt><dd>{% if definition.requires_document %}Yes{% else %}No{% endif %}</dd>
+      <dt>Status</dt><dd>{% if definition.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</dd>
+      <dt>Origin</dt><dd>{% if definition.is_seeded %}Standard template{% else %}Added by this church{% endif %}</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>Where volunteers stand</h2>
+    {% if instance_total %}
+      <table class="data">
+        <thead><tr><th>Status</th><th class="num">Volunteers</th></tr></thead>
+        <tbody>
+          {% for label, count in status_counts %}
+            <tr><td>{{ label }}</td><td class="num">{{ count }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="small muted mt1 mb0">Across {{ instance_total }} active volunteer{{ instance_total|pluralize }}.</p>
+    {% else %}
+      <p class="muted mb0">
+        No volunteer has this requirement yet. It attaches to people as they are assigned
+        to roles that match the "applies to" rule.
+      </p>
+    {% endif %}
+  </div>
+</div>
+
+{% if definition.description %}
+  <div class="card">
+    <h2>Guidance for admins</h2>
+    <p class="mb0 measure">{{ definition.description|linebreaksbr }}</p>
+  </div>
+{% endif %}
+{% endblock %}

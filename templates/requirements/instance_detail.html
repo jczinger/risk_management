@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}{{ instance.definition.name }} — {{ instance.volunteer.display_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ instance.definition.name }}</h1>
+    <p class="lede">
+      <a href="{% url 'org:volunteer_detail' instance.volunteer.pk %}">{{ instance.volunteer.display_name }}</a>
+      · <a href="{% url 'requirements:definition_detail' instance.definition.pk %}">requirement settings</a>
+    </p>
+  </div>
+  <div class="actions">
+    {% if instance.definition.is_crc %}
+      <a class="btn btn--primary" href="{% url 'requirements:crc_create' instance.volunteer.pk %}">Record a check</a>
+    {% elif instance.status != "not_applicable" and instance.status != "blocked" %}
+      <a class="btn btn--primary" href="{% url 'requirements:instance_complete' instance.pk %}">
+        {% if instance.status == "complete" %}Renew{% else %}Mark complete{% endif %}
+      </a>
+    {% endif %}
+    <a class="btn" href="{% url 'documents:create' instance.volunteer.pk %}?instance={{ instance.pk }}">Add a document</a>
+  </div>
+</div>
+
+{% if dependency %}
+  <div class="callout callout--warning">
+    <p class="mb0">
+      Your policy expects <strong>{{ dependency.definition.name }}</strong> first; it is
+      currently {{ dependency.get_status_display|lower }}.
+    </p>
+  </div>
+{% endif %}
+
+<div class="grid grid--2">
+  <div class="card">
+    <h2>Status</h2>
+    <dl class="facts">
+      <dt>Status</dt><dd><strong>{{ instance.get_status_display }}</strong></dd>
+      <dt>Started</dt><dd>{{ instance.started_on|date:"j F Y"|default:"—" }}</dd>
+      <dt>Completed</dt><dd>{{ instance.completed_on|date:"j F Y"|default:"—" }}</dd>
+      <dt>Next due</dt><dd>{{ instance.expires_on|date:"j F Y"|default:"—" }}</dd>
+      {% if instance.due_on %}
+        <dt>Hard deadline</dt><dd><strong>{{ instance.due_on|date:"j F Y" }}</strong>{% if instance.due_reason %}<div class="small muted">{{ instance.due_reason }}</div>{% endif %}</dd>
+      {% endif %}
+      {% if instance.not_applicable_reason %}
+        <dt>Why not applicable</dt><dd>{{ instance.not_applicable_reason }}</dd>
+      {% endif %}
+      {% if instance.status == "waived" %}
+        <dt>Waived by</dt><dd>{{ instance.waived_by }} on {{ instance.waived_on|date:"j F Y" }}</dd>
+        <dt>Reason</dt><dd>{{ instance.waived_reason }}</dd>
+      {% endif %}
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>Notes</h2>
+    <p class="small faint">Encrypted with your church's key.</p>
+    {% if instance.notes %}
+      <p class="mb0">{{ instance.notes|linebreaksbr }}</p>
+    {% else %}
+      <p class="muted mb0">No notes recorded.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card card--flush">
+  <div class="card-head"><h2>Documents</h2></div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Label</th><th>Date</th><th>Held as</th></tr></thead>
+      <tbody>
+        {% for document in documents %}
+          <tr>
+            <td><a href="{% url 'documents:detail' document.pk %}">{{ document.title }}</a></td>
+            <td class="small nowrap">{{ document.document_date|date:"j M Y"|default:"—" }}</td>
+            <td class="small">{{ document.mode }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="3" class="empty"><strong>No documents attached</strong></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

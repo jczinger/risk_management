@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Add a document{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Add a document</h1>
+    <p class="lede">
+      For <a href="{% url 'org:volunteer_detail' volunteer.pk %}">{{ volunteer.display_name }}</a>
+      {% if instance %} · {{ instance.definition.name }}{% endif %}
+      {% if crc_record %} · criminal record check {{ crc_record.report_date|date:"j M Y" }}{% endif %}
+    </p>
+  </div>
+</div>
+
+{% if mode == "store" %}
+  <div class="callout callout--info">
+    <h3>Files are encrypted before they touch the disk</h3>
+    <p class="mb0">
+      The file on the server is ciphertext — opening it without your church's key produces
+      noise. It can only be read back through this system, and every view is logged.
+    </p>
+  </div>
+{% elif mode == "link" %}
+  <div class="callout callout--info">
+    <p class="mb0">
+      This church links to its own document store rather than uploading. Make sure the link
+      points somewhere your administrators can actually reach, and that access to it is
+      controlled — VMS cannot enforce permissions on a system it does not host.
+    </p>
+  </div>
+{% else %}
+  <div class="callout callout--info">
+    <p class="mb0">
+      This church tracks hard copies. Record where the document is filed so the next person
+      can find it.
+    </p>
+  </div>
+{% endif %}
+
+<div class="card">
+  <form method="post" enctype="multipart/form-data" novalidate>
+    {% csrf_token %}
+    {% if instance %}<input type="hidden" name="instance" value="{{ instance.pk }}">{% endif %}
+    {% if crc_record %}<input type="hidden" name="crc" value="{{ crc_record.pk }}">{% endif %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">Save document</button>
+      <a class="btn" href="{% url 'org:volunteer_detail' volunteer.pk %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<p class="small muted">
+  Keep the label free of personal details — it is the one field here that is not encrypted,
+  so that document lists stay searchable.
+</p>
+{% endblock %}

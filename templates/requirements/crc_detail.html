@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Criminal record check — {{ volunteer.display_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Criminal record check — {{ record.report_date|date:"j F Y" }}</h1>
+    <p class="lede"><a href="{% url 'org:volunteer_detail' volunteer.pk %}">{{ volunteer.display_name }}</a></p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'documents:create' volunteer.pk %}?crc={{ record.pk }}">Attach the clearance letter</a>
+  </div>
+</div>
+
+{% if automatic_convictions %}
+  <div class="callout callout--permanent">
+    <h3>Permanently disqualified — no override available</h3>
+    <p>
+      An automatic disqualifier under the Plan to Protect policy has been recorded.
+      {{ volunteer.display_name }} is barred from every position of trust, permanently. Any
+      assignments they held have been ended.
+    </p>
+    <p class="mb0 small">
+      This determination cannot be lifted by any administrator, by leadership, or by the
+      platform operator. There is no screen, form or command in this system that reverses it.
+    </p>
+  </div>
+{% endif %}
+
+<div class="grid grid--2">
+  <div class="card">
+    <h2>The check</h2>
+    <dl class="facts">
+      <dt>Result</dt>
+      <dd>
+        {% if record.is_cleared %}
+          <span class="badge badge--ok">Cleared</span>
+        {% else %}
+          <span class="badge badge--danger">Not Clear</span>
+        {% endif %}
+      </dd>
+      <dt>Report date</dt><dd>{{ record.report_date|date:"j F Y" }}</dd>
+      {% if record.is_cleared %}
+        <dt>Valid until</dt><dd>{{ record.expires_on|date:"j F Y" }} <span class="small muted">(3 years)</span></dd>
+      {% endif %}
+      <dt>Vulnerable sector</dt>
+      <dd>{% if record.includes_vulnerable_sector %}Included{% else %}<strong>Not included</strong>{% endif %}</dd>
+      <dt>Fingerprint-verified</dt><dd>{% if record.is_fingerprint_verified %}Yes{% else %}No{% endif %}</dd>
+      <dt>Issued by</dt><dd>{{ record.issuing_body|default:"—" }}</dd>
+      {% if record.not_clear_outcome %}
+        <dt>Outcome</dt><dd>{{ record.get_not_clear_outcome_display }}</dd>
+      {% endif %}
+      {% if record.superseded_by_id %}
+        <dt>Superseded by</dt><dd><a href="{% url 'requirements:crc_detail' record.superseded_by_id %}">a later check</a></dd>
+      {% endif %}
+      <dt>Recorded</dt><dd>{{ record.created_at|date:"j F Y, H:i" }}</dd>
+    </dl>
+    {% if record.notes %}
+      <h3 class="mt2">Notes</h3>
+      <p class="small mb0">{{ record.notes|linebreaksbr }}</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Next steps</h2>
+
+    {% if needs_outcome %}
+      <div class="callout callout--danger">
+        <h3>Outcome needed</h3>
+        <p class="mb0 small">
+          A Not Clear result has two possible resolutions under the policy: a
+          fingerprint-verified check with the convictions disclosed and verified, or the
+          volunteer withdraws.
+        </p>
+      </div>
+      <a class="btn btn--primary" href="{% url 'requirements:crc_resolve' record.pk %}">Record the outcome</a>
+    {% endif %}
+
+    {% if record.result == "not_clear" and not automatic_convictions %}
+      <p class="mt1"><a class="btn" href="{% url 'requirements:crc_conviction_add' record.pk %}">Record a conviction</a></p>
+    {% endif %}
+
+    {% if can_record_override %}
+      <div class="callout callout--warning mt1">
+        <h3>Leadership decision required</h3>
+        <p class="mb0 small">
+          A discretionary red flag has been recorded. Leadership must decide, and the
+          decision must set out the reasoning and the mitigation steps. Both are kept
+          permanently.
+        </p>
+      </div>
+      <a class="btn btn--primary" href="{% url 'requirements:crc_override' record.pk %}">Record the leadership decision</a>
+    {% elif automatic_convictions %}
+      <p class="muted mb0">
+        No further action is available on this check. An automatic disqualifier is final.
+      </p>
+    {% elif record.is_cleared %}
+      <p class="muted mb0">
+        Nothing outstanding. The next check falls due {{ record.expires_on|date:"j F Y" }},
+        and reminders will go out ahead of that.
+      </p>
+    {% endif %}
+  </div>
+</div>
+
+{% if record.convictions.exists %}
+  <div class="card card--flush">
+    <div class="card-head"><h2>Convictions recorded</h2></div>
+    {% for conviction in automatic_convictions %}
+      <div class="req req--overdue">
+        <div class="req-main">
+          <div class="req-name">{{ conviction.category }}</div>
+          <div class="req-meta">
+            {% if conviction.conviction_date %}{{ conviction.conviction_date|date:"j F Y" }} · {% endif %}
+            recorded by {{ conviction.recorded_by|default:"an administrator" }} on {{ conviction.created_at|date:"j M Y" }}
+          </div>
+          {% if conviction.description %}<div class="small mt1">{{ conviction.description|linebreaksbr }}</div>{% endif %}
+        </div>
+        <div class="req-status"><span class="badge badge--danger">Automatic disqualifier</span></div>
+      </div>
+    {% endfor %}
+    {% for conviction in discretionary_convictions %}
+      <div class="req">
+        <div class="req-main">
+          <div class="req-name">{{ conviction.category }}</div>
+          <div class="req-meta">
+            {% if conviction.conviction_date %}{{ conviction.conviction_date|date:"j F Y" }} · {% endif %}
+            recorded by {{ conviction.recorded_by|default:"an administrator" }} on {{ conviction.created_at|date:"j M Y" }}
+          </div>
+          {% if conviction.description %}<div class="small mt1">{{ conviction.description|linebreaksbr }}</div>{% endif %}
+        </div>
+        <div class="req-status"><span class="badge badge--warn">Discretionary</span></div>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if record.overrides.exists %}
+  <div class="card card--flush">
+    <div class="card-head"><h2>Leadership decisions</h2></div>
+    {% for override in record.overrides.all %}
+      <div class="req">
+        <div class="req-main">
+          <div class="req-name">{{ override.get_decision_display }}</div>
+          <div class="req-meta">
+            by {{ override.decided_by }} on {{ override.decided_on|date:"j F Y" }}
+            {% if override.conviction %} · regarding {{ override.conviction.category }}{% endif %}
+          </div>
+          <dl class="facts mt1 small">
+            <dt>Reasoning</dt><dd>{{ override.reasoning|linebreaksbr }}</dd>
+            <dt>Mitigation steps</dt><dd>{{ override.mitigation_steps|linebreaksbr }}</dd>
+          </dl>
+        </div>
+        <div class="req-status"><span class="badge badge--info">Permanent record</span></div>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if record.documents.exists %}
+  <div class="card card--flush">
+    <div class="card-head"><h2>Attached documents</h2></div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>Label</th><th>Date</th><th>Held as</th></tr></thead>
+        <tbody>
+          {% for document in record.documents.all %}
+            <tr>
+              <td><a href="{% url 'documents:detail' document.pk %}">{{ document.title }}</a></td>
+              <td class="small nowrap">{{ document.document_date|date:"j M Y"|default:"—" }}</td>
+              <td class="small">{{ document.mode }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

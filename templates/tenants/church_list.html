@@ -1,0 +1,86 @@
+{% extends "base_console.html" %}
+{% block console_title %}Churches{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Churches</h1>
+    <p class="lede">
+      Every church provisioned on this platform. Each one's data lives in its own
+      database schema with its own encryption key.
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn btn--primary" href="{% url 'tenants:church_create' %}">Onboard a church</a>
+  </div>
+</div>
+
+{% if pending_backup %}
+  <div class="callout callout--warning">
+    <h3>{{ pending_backup|length }} church{{ pending_backup|pluralize:"es" }} have not yet backed up their encryption key</h3>
+    <p class="mb0">
+      Their admins are held at the key-backup step and cannot use the system until they
+      confirm. That is intentional — without an offline copy of the key, their records
+      could not be recovered.
+    </p>
+  </div>
+{% endif %}
+
+<div class="card card--flush">
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Church</th>
+          <th>Short code</th>
+          <th>Hostname</th>
+          <th>Documents</th>
+          <th>Key backed up</th>
+          <th>Reminders</th>
+          <th>Status</th>
+          <th>Added</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for church in churches %}
+          {% if church.schema_name != "public" %}
+            <tr>
+              <td><a href="{% url 'tenants:church_detail' church.pk %}"><strong>{{ church.name }}</strong></a></td>
+              <td class="mono">{{ church.schema_name }}</td>
+              <td class="small">
+                {% with domain=church.primary_domain %}
+                  {% if domain %}{{ domain.domain }}{% else %}<span class="faint">none</span>{% endif %}
+                {% endwith %}
+              </td>
+              <td class="small">{{ church.get_document_mode_display }}</td>
+              <td>
+                {% if church.key_backup_pending %}
+                  <span class="badge badge--warn">Pending</span>
+                {% else %}
+                  <span class="badge badge--ok">{{ church.key_backup_confirmed_at|date:"j M Y" }}</span>
+                {% endif %}
+              </td>
+              <td class="small">
+                {% if church.notifications_enabled %}{{ church.reminder_lead_days }} days{% else %}<span class="faint">off</span>{% endif %}
+              </td>
+              <td>
+                {% if church.is_active %}
+                  <span class="badge badge--ok">Active</span>
+                {% else %}
+                  <span class="badge badge--muted">Inactive</span>
+                {% endif %}
+              </td>
+              <td class="small nowrap">{{ church.created_on|date:"j M Y" }}</td>
+            </tr>
+          {% endif %}
+        {% empty %}
+          <tr><td colspan="8" class="empty">
+            <strong>No churches yet</strong>
+            Onboard the first one to get started.
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

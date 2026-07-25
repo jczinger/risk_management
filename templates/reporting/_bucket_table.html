@@ -1,0 +1,72 @@
+{% comment %}One dashboard bucket. Expects: title, subtitle, rows, tone.{% endcomment %}
+
+{% if rows %}
+  <div class="card card--flush">
+    <div class="card-head">
+      <div>
+        <h2>{{ title }}</h2>
+        <p class="small muted mb0">{{ subtitle }}</p>
+      </div>
+      <span class="badge {% if tone == 'danger' %}badge--danger{% elif tone == 'warn' %}badge--warn{% else %}badge--muted{% endif %}">
+        {{ rows|length }}
+      </span>
+    </div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr>
+            <th>Volunteer</th><th>Requirement</th><th>Due</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for instance in rows %}
+            <tr>
+              <td>
+                <a href="{% url 'org:volunteer_detail' instance.volunteer.pk %}"><strong>{{ instance.volunteer.sort_name }}</strong></a>
+                {% if instance.volunteer.is_permanently_disqualified %}
+                  <span class="badge badge--danger">Disqualified</span>
+                {% elif instance.volunteer.is_blocked %}
+                  <span class="badge badge--danger">Blocked</span>
+                {% endif %}
+              </td>
+              <td>
+                <a href="{% url 'requirements:instance_detail' instance.pk %}">{{ instance.definition.name }}</a>
+                {% if instance.due_reason %}<div class="row-note">{{ instance.due_reason }}</div>{% endif %}
+              </td>
+              <td class="small nowrap">
+                {% if instance.effective_due_date %}
+                  {{ instance.effective_due_date|date:"j M Y" }}
+                  {% with days=instance.days_until_expiry %}
+                    {% if days < 0 %}
+                      <div class="row-note" style="color:var(--danger)">{{ days|cut:"-" }} day{{ days|cut:"-"|pluralize }} overdue</div>
+                    {% else %}
+                      <div class="row-note">in {{ days }} day{{ days|pluralize }}</div>
+                    {% endif %}
+                  {% endwith %}
+                {% else %}
+                  <span class="faint">No date set</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if instance.status == "blocked" %}<span class="badge badge--danger">Blocked</span>
+                {% elif instance.status == "overdue" %}<span class="badge badge--danger">Overdue</span>
+                {% elif instance.status == "complete" %}<span class="badge badge--warn">Expiring</span>
+                {% elif instance.status == "in_progress" %}<span class="badge badge--warn">In progress</span>
+                {% else %}<span class="badge badge--muted">Not started</span>{% endif %}
+              </td>
+              <td class="right nowrap">
+                {% if instance.definition.is_crc %}
+                  {% if not instance.volunteer.is_permanently_disqualified %}
+                    <a class="btn btn--sm" href="{% url 'requirements:crc_create' instance.volunteer.pk %}">Record check</a>
+                  {% endif %}
+                {% elif instance.status != "blocked" %}
+                  <a class="btn btn--sm" href="{% url 'requirements:instance_complete' instance.pk %}">Complete</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}

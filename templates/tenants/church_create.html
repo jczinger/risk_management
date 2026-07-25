@@ -1,0 +1,45 @@
+{% extends "base_console.html" %}
+{% block console_title %}Onboard a church{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Onboard a church</h1>
+    <p class="lede">
+      This creates the church's own database schema, generates its encryption key, adds
+      its first screening administrator, and seeds the Plan to Protect requirement
+      template.
+    </p>
+  </div>
+</div>
+
+<div class="callout callout--info">
+  <h3>You will see the encryption key once</h3>
+  <p class="mb0">
+    On the next screen. Copy it straight into Keeper Security — it is stored here only
+    in wrapped form, and the church's records cannot be recovered without either it or
+    <code>PLATFORM_MASTER_KEY</code>. The church's own admin will separately be required
+    to save a copy before they can use the system.
+  </p>
+</div>
+
+<form method="post" novalidate>
+  {% csrf_token %}
+
+  <fieldset>
+    <legend>The church</legend>
+    {% include "partials/form.html" with form=form %}
+    <p class="helptext">
+      Tenant hostnames default to <code>&lt;short code&gt;.{{ base_domain }}</code>.
+      Whatever hostname you use must resolve to this server and be listed in
+      <code>ALLOWED_HOSTS</code>.
+    </p>
+  </fieldset>
+
+  <div class="btn-row">
+    <button type="submit" class="btn btn--primary btn--lg">Provision this church</button>
+    <a class="btn" href="{% url 'tenants:church_list' %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

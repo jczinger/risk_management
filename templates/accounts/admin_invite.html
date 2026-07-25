@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Add an administrator{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Add a screening administrator</h1>
+    <p class="lede">They will have the same access you do, including to volunteers' personal information.</p>
+  </div>
+</div>
+
+<div class="callout callout--info">
+  <p class="mb0">
+    Leaving the password blank is the better option: they register a passkey on their own
+    device and no shared secret ever exists. Set a temporary password only if a passkey
+    is not workable for them.
+  </p>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <button type="submit" class="btn btn--primary">Add administrator</button>
+    <a class="btn" href="{% url 'accounts:admin_list' %}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

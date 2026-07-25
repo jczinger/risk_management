@@ -1,0 +1,120 @@
+{% comment %}
+The compliance report body. Shared by the screen view and the print/PDF view so the two
+cannot drift apart.
+{% endcomment %}
+
+<div class="card card--flush">
+  <div class="card-head">
+    <h2>Every volunteer</h2>
+    <span class="small muted">{{ rows|length }} row{{ rows|length|pluralize }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Volunteer</th>
+          <th>Roles</th>
+          <th class="num">Overdue</th>
+          <th class="num">Due soon</th>
+          <th class="num">In progress</th>
+          <th>Verdict</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>
+              {% if print_view %}
+                <strong>{{ row.volunteer.sort_name }}</strong>
+              {% else %}
+                <a href="{% url 'org:volunteer_detail' row.volunteer.pk %}"><strong>{{ row.volunteer.sort_name }}</strong></a>
+              {% endif %}
+              {% if not row.volunteer.is_active %}<div class="row-note">No longer serving</div>{% endif %}
+              {% if row.volunteer.is_minor %}<div class="row-note">Under 18</div>{% endif %}
+            </td>
+            <td class="small">
+              {% for role in row.roles %}{{ role.department.name }} → {{ role.name }}{% if not forloop.last %}<br>{% endif %}{% empty %}<span class="faint">None</span>{% endfor %}
+            </td>
+            <td class="num">{% if row.overdue_count %}<strong>{{ row.overdue_count }}</strong>{% else %}<span class="faint">0</span>{% endif %}</td>
+            <td class="num">{% if row.due_soon_count %}{{ row.due_soon_count }}{% else %}<span class="faint">0</span>{% endif %}</td>
+            <td class="num">{% if row.outstanding_count %}{{ row.outstanding_count }}{% else %}<span class="faint">0</span>{% endif %}</td>
+            <td>
+              {% if row.status_label == "Compliant" %}<span class="badge badge--ok">Compliant</span>
+              {% elif row.status_label == "Coming due" %}<span class="badge badge--warn">Coming due</span>
+              {% elif row.status_label == "Disqualified" %}<span class="badge badge--danger">Disqualified</span>
+              {% elif row.status_label == "Blocked" %}<span class="badge badge--danger">Blocked</span>
+              {% elif row.status_label == "Overdue" %}<span class="badge badge--danger">Overdue</span>
+              {% else %}<span class="badge badge--warn">{{ row.status_label }}</span>{% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="empty"><strong>No volunteers in scope</strong></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% comment %}
+The detail behind each verdict. On screen it is collapsed per volunteer; in print it is
+laid out in full, because a report handed to an insurer has to stand on its own.
+{% endcomment %}
+
+{% if print_view %}
+  <div class="page-break"></div>
+  <h2>Detail by volunteer</h2>
+  {% for row in rows %}
+    <div class="card">
+      <h3>{{ row.volunteer.sort_name }}
+        <span class="small muted">— {{ row.status_label }}</span>
+      </h3>
+      <table class="data">
+        <thead><tr><th>Requirement</th><th>Status</th><th>Completed</th><th>Next due</th></tr></thead>
+        <tbody>
+          {% for instance in row.instances %}
+            <tr>
+              <td>{{ instance.definition.name }}</td>
+              <td>{{ instance.get_status_display }}{% if instance.not_applicable_reason %} <span class="small">({{ instance.not_applicable_reason }})</span>{% endif %}</td>
+              <td class="nowrap">{{ instance.completed_on|date:"j M Y"|default:"—" }}</td>
+              <td class="nowrap">{{ instance.effective_due_date|date:"j M Y"|default:"—" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4">No applicable requirements.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endfor %}
+{% else %}
+  <details class="disclosure">
+    <summary>Show every requirement, volunteer by volunteer</summary>
+    {% for row in rows %}
+      <div class="card card--flush">
+        <div class="card-head">
+          <h3><a href="{% url 'org:volunteer_detail' row.volunteer.pk %}">{{ row.volunteer.sort_name }}</a></h3>
+          <span class="small muted">{{ row.status_label }}</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data">
+            <thead><tr><th>Requirement</th><th>Status</th><th>Completed</th><th>Next due</th></tr></thead>
+            <tbody>
+              {% for instance in row.instances %}
+                <tr>
+                  <td>{{ instance.definition.name }}</td>
+                  <td>
+                    {{ instance.get_status_display }}
+                    {% if instance.not_applicable_reason %}<div class="row-note">{{ instance.not_applicable_reason }}</div>{% endif %}
+                  </td>
+                  <td class="small nowrap">{{ instance.completed_on|date:"j M Y"|default:"—" }}</td>
+                  <td class="small nowrap">{{ instance.effective_due_date|date:"j M Y"|default:"—" }}</td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="4" class="muted">No applicable requirements.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endfor %}
+  </details>
+{% endif %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Audit entry {{ event.pk }}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ event.get_action_display }}</h1>
+    <p class="lede">{{ event.occurred_at|date:"l j F Y, H:i:s T" }}</p>
+  </div>
+  <div class="actions"><a class="btn" href="{% url 'reporting:audit_trail' %}">Back to the trail</a></div>
+</div>
+
+<div class="card">
+  <dl class="facts">
+    <dt>Who</dt><dd>{{ event.actor_display }}</dd>
+    <dt>Action</dt><dd>{{ event.get_action_display }}</dd>
+    <dt>Record type</dt><dd>{{ event.entity_type }}</dd>
+    <dt>Record</dt><dd>{{ event.entity_label|default:"—" }}{% if event.entity_id %} <span class="faint">(#{{ event.entity_id }})</span>{% endif %}</dd>
+    <dt>Summary</dt><dd>{{ event.summary|default:"—" }}</dd>
+    <dt>From</dt><dd class="mono small">{{ event.actor_ip|default:"—" }}</dd>
+    {% if event.actor_user_agent %}<dt>Browser</dt><dd class="small">{{ event.actor_user_agent }}</dd>{% endif %}
+  </dl>
+</div>
+
+{% if detail %}
+  <div class="card">
+    <h2>Detail</h2>
+    <p class="small faint">
+      Encrypted at rest — a before/after diff can contain personal information, so it is
+      stored the same way the record itself is.
+    </p>
+    <table class="data">
+      <tbody>
+        {% for key, value in detail.items %}
+          <tr>
+            <th style="width:14rem">{{ key }}</th>
+            <td class="small">
+              {% if value.before or value.after %}
+                <div><span class="faint">before:</span> {{ value.before|default:"—" }}</div>
+                <div><span class="faint">after:</span> <strong>{{ value.after|default:"—" }}</strong></div>
+              {% else %}
+                {{ value }}
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+
+<p class="small muted">
+  Audit entries cannot be changed or removed by anyone using this system, including the
+  platform operator's console — the model layer refuses updates and deletes outright.
+</p>
+{% endblock %}

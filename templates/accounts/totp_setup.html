@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Set up your authenticator app{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+{# In the mandatory case the visitor is only half-authenticated, so base.html omits the
+   nav on its own — no override needed here. #}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Set up your authenticator app</h1>
+    {% if mandatory %}
+      <p class="lede">
+        Required before you can continue. A password on its own is not enough to protect
+        volunteers' personal information.
+      </p>
+    {% else %}
+      <p class="lede">A second factor for the password sign-in route.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>1. Scan this code</h2>
+  <p class="muted">
+    Use any authenticator app — Microsoft Authenticator, Google Authenticator, 1Password,
+    Bitwarden, Authy.
+  </p>
+  <div class="qr"><img src="{{ qr }}" alt="QR code for setting up two-step verification"></div>
+
+  <details class="disclosure mt1">
+    <summary>Can't scan? Enter this key by hand</summary>
+    <div class="keybox">{{ secret }}</div>
+    <p class="small muted mb0">Time-based, 6 digits, 30-second interval.</p>
+  </details>
+</div>
+
+<div class="card">
+  <h2>2. Confirm it works</h2>
+  <p class="muted">
+    Enter the code your app is showing now. Nothing is saved until a code is accepted, so
+    you cannot lock yourself out here.
+  </p>
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <button type="submit" class="btn btn--primary btn--block">Confirm</button>
+  </form>
+</div>
+
+{% if not mandatory %}
+  <p class="small"><a href="{% url 'accounts:security' %}">Back to account security</a></p>
+{% endif %}
+{% endblock %}

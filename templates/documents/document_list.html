@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Documents{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Documents</h1>
+    <p class="lede">
+      {% if mode == "store" %}
+        This church stores documents in the system. Files are encrypted with your church's
+        key before they are written to disk.
+      {% elif mode == "link" %}
+        This church links to documents held in its own store. VMS tracks status and dates.
+      {% else %}
+        This church keeps hard copies. VMS tracks status and dates only.
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="card card--flush">
+  <div class="card-head">
+    <h2>Most recent</h2>
+    <span class="small muted">Showing up to 200</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Volunteer</th><th>Label</th><th>Kind</th><th>Date</th><th>Held as</th></tr></thead>
+      <tbody>
+        {% for document in documents %}
+          <tr>
+            <td><a href="{% url 'org:volunteer_detail' document.volunteer.pk %}">{{ document.volunteer.sort_name }}</a></td>
+            <td><a href="{% url 'documents:detail' document.pk %}"><strong>{{ document.title }}</strong></a></td>
+            <td class="small">{{ document.get_kind_display }}</td>
+            <td class="small nowrap">{{ document.document_date|date:"j M Y"|default:"—" }}</td>
+            <td class="small">
+              {% if document.mode == "store" %}<span class="badge badge--ok">Encrypted file</span>
+              {% elif document.mode == "link" %}<span class="badge badge--info">External link</span>
+              {% else %}<span class="badge badge--muted">Hard copy</span>{% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="5" class="empty">
+            <strong>No documents yet</strong>
+            Add them from a volunteer's page, or from a requirement that expects one.
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="small muted">
+  The document handling mode is set per church by the platform operator. Changing it affects
+  new records only — anything already stored stays readable.
+</p>
+{% endblock %}

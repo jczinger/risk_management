@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Audit trail{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Audit trail</h1>
+    <p class="lede">
+      Every change, permanently. Entries are append-only — nothing in this system can edit
+      or delete one, which is what makes it worth reading.
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <form class="filters filter-form" method="get"
+        hx-get="{% url 'reporting:audit_trail' %}"
+        hx-target="#audit-rows"
+        hx-swap="innerHTML"
+        hx-trigger="submit, change from:select"
+        hx-indicator="#audit-spinner">
+    <div class="field">
+      <label for="action">Action</label>
+      <select name="action" id="action">
+        <option value="">Any action</option>
+        {% for value, label in actions %}
+          <option value="{{ value }}" {% if filters.action == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="entity_type">Record type</label>
+      <select name="entity_type" id="entity_type">
+        <option value="">Any type</option>
+        {% for value in entity_types %}
+          <option value="{{ value }}" {% if filters.entity_type == value %}selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="since">From</label>
+      <input type="date" name="since" id="since" value="{{ filters.since }}">
+    </div>
+    <div class="field">
+      <label for="until">To</label>
+      <input type="date" name="until" id="until" value="{{ filters.until }}">
+    </div>
+    {% if filters.entity_id %}<input type="hidden" name="entity_id" value="{{ filters.entity_id }}">{% endif %}
+    <div class="field field--go"><button type="submit" class="btn">Filter</button></div>
+    <div class="field field--go">
+      <a class="btn" href="{% url 'reporting:audit_trail' %}">Clear</a>
+    </div>
+    <div class="field field--go"><span id="audit-spinner" class="htmx-indicator small muted">Loading…</span></div>
+  </form>
+</div>
+
+<div id="audit-rows">
+  {% include "reporting/_audit_rows.html" %}
+</div>
+{% endblock %}

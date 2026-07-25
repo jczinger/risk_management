@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Resolve a Not Clear result{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>How was this resolved?</h1>
+    <p class="lede">
+      Check dated {{ record.report_date|date:"j F Y" }} for
+      <a href="{% url 'org:volunteer_detail' volunteer.pk %}">{{ volunteer.display_name }}</a>
+    </p>
+  </div>
+</div>
+
+<div class="callout callout--info">
+  <p class="mb0">
+    The policy allows exactly two outcomes for a Not Clear result: the candidate submits a
+    fingerprint-verified check with the convictions disclosed and verified, or they withdraw.
+    Recording a withdrawal ends all of their assignments.
+  </p>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">Record the outcome</button>
+      <a class="btn" href="{% url 'requirements:crc_detail' record.pk %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<p class="small muted">
+  If a fingerprint-verified check is submitted, record it as a new criminal record check on
+  the volunteer's page with "fingerprint-verified" ticked.
+</p>
+{% endblock %}

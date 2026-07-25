@@ -1,0 +1,36 @@
+# VMS Stage 1 — pinned dependencies
+# Stack decisions are fixed by "VMS - Build Spec v1.0.md" §1; do not substitute.
+
+# --- Core framework ---
+Django==5.2.11
+django-tenants==3.9.0
+psycopg[binary]==3.2.12
+django-environ==0.12.0
+
+# --- UI ---
+django-htmx==1.26.0
+whitenoise==6.11.0
+
+# --- Background jobs ---
+# The redis client version is left to celery[redis]/kombu to resolve; pinning it
+# independently conflicts with kombu's own upper bound.
+celery[redis]==5.5.3
+
+# --- Auth ---
+argon2-cffi==25.1.0
+webauthn==2.7.0
+pyotp==2.9.0
+qrcode[pil]==8.2
+django-ratelimit==4.1.0
+
+# --- Crypto (field-level encryption, AES-256-GCM) ---
+cryptography==46.0.3
+
+# --- Documents ---
+Pillow==12.0.0
+
+# --- Reporting (PDF export; degrades to print-CSS HTML if unavailable) ---
+weasyprint==67.0
+
+# --- Serving ---
+gunicorn==23.0.0

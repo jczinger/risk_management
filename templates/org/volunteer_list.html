@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Volunteers{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Volunteers</h1>
+    <p class="lede">
+      Ministry Personnel files. Records are retained permanently, including after someone
+      stops serving.
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn btn--primary" href="{% url 'org:volunteer_create' %}">Add a volunteer</a>
+  </div>
+</div>
+
+<div class="card">
+  {% comment %}
+  Filtering is HTMX-driven: the form targets the table, so typing a name re-renders 25
+  rows rather than the whole page. Everything filtered on here is a plaintext column —
+  encrypted fields are not searchable by design.
+  {% endcomment %}
+  <form class="filters filter-form"
+        hx-get="{% url 'org:volunteer_list' %}"
+        hx-target="#volunteer-results"
+        hx-swap="innerHTML"
+        hx-trigger="submit, change from:select, keyup changed delay:350ms from:input[name=q]"
+        hx-indicator="#list-spinner">
+    {% for field in form.visible_fields %}
+      <div class="field">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+      </div>
+    {% endfor %}
+    <div class="field field--go">
+      <button type="submit" class="btn">Filter</button>
+    </div>
+    <div class="field field--go">
+      <span id="list-spinner" class="htmx-indicator small muted">Searching…</span>
+    </div>
+  </form>
+</div>
+
+<div id="volunteer-results">
+  {% include "org/_volunteer_table.html" %}
+</div>
+{% endblock %}

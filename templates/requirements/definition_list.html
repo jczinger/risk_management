@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Requirements{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Requirements</h1>
+    <p class="lede">
+      What this church requires of its volunteers. Seeded from the Plan to Protect
+      template and yours to change — rename, re-time, add or deactivate anything.
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn btn--primary" href="{% url 'requirements:definition_create' %}">Add a requirement</a>
+    {% if total == 0 %}
+      <form method="post" action="{% url 'requirements:definition_seed' %}">
+        {% csrf_token %}<button type="submit" class="btn">Apply the standard template</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if total == 0 %}
+  <div class="callout callout--warning">
+    <h3>No requirements defined</h3>
+    <p class="mb0">
+      Nothing will be tracked until there is at least one. Apply the standard 14-item
+      Plan to Protect template to get started, then edit it to match your policy.
+    </p>
+  </div>
+{% endif %}
+
+{% include "requirements/_definition_table.html" with title="Onboarding sequence" definitions=onboarding %}
+{% include "requirements/_definition_table.html" with title="Recurring requirements" definitions=recurring %}
+
+<details class="disclosure">
+  <summary>Re-apply the standard template</summary>
+  <div class="card">
+    <p class="small">
+      Adds any template requirement that is missing here. Requirements you have already
+      edited are left exactly as they are — nothing is overwritten.
+    </p>
+    <form method="post" action="{% url 'requirements:definition_seed' %}">
+      {% csrf_token %}<button type="submit" class="btn">Add missing template requirements</button>
+    </form>
+  </div>
+</details>
+
+<p class="small muted">
+  Requirement names, cadences and appendix references come from your church's Plan to
+  Protect policy. This system stores pointers to your policy manual, never its text.
+</p>
+{% endblock %}

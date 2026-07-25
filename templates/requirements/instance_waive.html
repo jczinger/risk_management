@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Waive: {{ instance.definition.name }}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Waive {{ instance.definition.name }}</h1>
+    <p class="lede">For <a href="{% url 'org:volunteer_detail' instance.volunteer.pk %}">{{ instance.volunteer.display_name }}</a></p>
+  </div>
+</div>
+
+<div class="callout callout--warning">
+  <h3>A waiver is a permanent record</h3>
+  <p class="mb0">
+    The reason and the authorising leader are written to the audit trail and kept. If your
+    insurer or district asks why this requirement was set aside, this is the answer they
+    will be given — so write it for that reader.
+  </p>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--danger">Record this waiver</button>
+      <a class="btn" href="{% url 'org:volunteer_detail' instance.volunteer.pk %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

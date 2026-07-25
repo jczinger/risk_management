@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{% if role %}Edit {{ role.name }}{% else %}Add a role{% endif %}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{% if role %}Edit {{ role.name }}{% else %}Add a role{% endif %}</h1>
+    <p class="lede">The three flags below drive which requirements apply. They are worth getting right.</p>
+  </div>
+</div>
+
+<div class="callout callout--info">
+  <h3>What the flags do</h3>
+  <ul class="mb0">
+    <li><strong>Leadership</strong> — records that this is a director or secretary position.
+      Leadership are screened exactly like any other volunteer; the flag exists so
+      requirements can target them and so reports can show who leads what.</li>
+    <li><strong>Position of trust</strong> — requires full screening, including the criminal
+      record check for anyone 18 or over. Leave it on unless the role genuinely has no
+      access to children, youth or vulnerable adults.</li>
+    <li><strong>Handles personal information</strong> — the Confidentiality Agreement targets
+      this flag.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">Save</button>
+      <a class="btn" href="{% if role %}{% url 'org:role_detail' role.pk %}{% else %}{% url 'org:role_list' %}{% endif %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% if role %}
+  <p class="small muted">
+    Changing a flag immediately recalculates requirements for everyone currently serving in
+    this role.
+  </p>
+{% endif %}
+{% endblock %}

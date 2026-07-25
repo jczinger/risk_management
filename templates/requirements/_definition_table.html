@@ -1,0 +1,41 @@
+{% comment %}A table of requirement definitions. Expects: title, definitions.{% endcomment %}
+<div class="card card--flush">
+  <div class="card-head">
+    <h2>{{ title }}</h2>
+    <span class="small muted">{{ definitions|length }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th class="num">#</th><th>Requirement</th><th>Type</th>
+          <th>How often</th><th>Applies to</th><th>Age</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for definition in definitions %}
+          <tr>
+            <td class="num faint">{{ definition.sequence }}</td>
+            <td>
+              <a href="{% url 'requirements:definition_detail' definition.pk %}"><strong>{{ definition.name }}</strong></a>
+              {% if definition.appendix_reference %}<div class="row-note">{{ definition.appendix_reference }}</div>{% endif %}
+              {% if definition.must_follow %}<div class="row-note">after: {{ definition.must_follow.name }}</div>{% endif %}
+            </td>
+            <td class="small">{{ definition.get_requirement_type_display }}</td>
+            <td class="small nowrap">{{ definition.cadence_display }}</td>
+            <td class="small">
+              {{ definition.get_applies_to_display }}
+              {% if definition.applies_to == "specific" %}
+                <div class="row-note">{% for role in definition.roles.all %}{{ role.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</div>
+              {% endif %}
+            </td>
+            <td class="small">{% if definition.age_rule == "adults_only" %}<span class="badge badge--info">18+</span>{% else %}<span class="faint">Any</span>{% endif %}</td>
+            <td>{% if definition.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="7" class="empty"><strong>None</strong></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

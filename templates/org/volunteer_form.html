@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{% if volunteer %}Edit {{ volunteer.display_name }}{% else %}Add a volunteer{% endif %}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{% if volunteer %}Edit {{ volunteer.display_name }}{% else %}Add a volunteer{% endif %}</h1>
+    <p class="lede">
+      Names are stored in the clear so lists stay searchable. Everything else on this form
+      — date of birth, contact details, address, emergency contact, medical notes and
+      admin notes — is encrypted with your church's key.
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">{% if volunteer %}Save changes{% else %}Add volunteer{% endif %}</button>
+      <a class="btn" href="{% if volunteer %}{% url 'org:volunteer_detail' volunteer.pk %}{% else %}{% url 'org:volunteer_list' %}{% endif %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% if not volunteer %}
+  <p class="small muted">
+    The date of birth matters more than it looks: it drives the under-18 exemption from the
+    criminal record check and the automatic activation of that check when someone turns 18.
+  </p>
+{% endif %}
+{% endblock %}

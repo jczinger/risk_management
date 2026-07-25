@@ -1,0 +1,18 @@
+{{ church_name }} — volunteer screening reminders
+{{ as_of|date:"l j F Y" }}
+
+{% if overdue %}OVERDUE ({{ overdue|length }})
+{% for entry in overdue %}  - {{ entry.instance.volunteer.sort_name }}: {{ entry.instance.definition.name }} — was due {{ entry.due_date|date:"j M Y" }}
+{% endfor %}
+{% endif %}{% if upcoming %}COMING DUE ({{ upcoming|length }})
+{% for entry in upcoming %}  - {{ entry.instance.volunteer.sort_name }}: {{ entry.instance.definition.name }} — due {{ entry.due_date|date:"j M Y" }} ({{ entry.lead_days }} days){% if entry.kind == "turning_18" %} [criminal record check now required — turned 18]{% endif %}
+{% endfor %}
+{% endif %}
+{% if dashboard_url %}Open the dashboard: {{ dashboard_url }}
+{% endif %}
+--
+This is the daily summary of volunteer screening requirements coming due or overdue at
+{{ church_name }}. It goes to screening administrators only. Volunteers are not emailed by
+this system.
+
+Reminder timing is configurable per church by the platform operator.

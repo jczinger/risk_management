@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% comment %}
+Chrome for the platform super-admin console (public schema).
+
+Distinguished visually from the church app on purpose: the operator switches between
+the two, and knowing which one you are looking at matters when the actions differ.
+{% endcomment %}
+
+{% block title %}{% block console_title %}Platform console{% endblock %} · VMS{% endblock %}
+
+{% block brand_class %} brand--console{% endblock %}
+{% block brand_url %}{% url 'tenants:church_list' %}{% endblock %}
+
+{% block nav %}
+  <a href="{% url 'tenants:church_list' %}" {% if nav == 'churches' %}class="active"{% endif %}>Churches</a>
+  <a href="{% url 'tenants:church_create' %}" {% if nav == 'onboard' %}class="active"{% endif %}>Onboard a church</a>
+  <a href="/django-admin/">Django admin</a>
+{% endblock %}

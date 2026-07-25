@@ -1,0 +1,43 @@
+{% comment %}Audit entries table. Rendered standalone for HTMX filter swaps.{% endcomment %}
+<div class="card card--flush">
+  <div class="card-head">
+    <h2>{{ total }} entr{{ total|pluralize:"y,ies" }}</h2>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr><th>When</th><th>Who</th><th>Action</th><th>Record</th><th>Summary</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for event in events %}
+          <tr>
+            <td class="small nowrap">{{ event.occurred_at|date:"j M Y" }}<div class="row-note">{{ event.occurred_at|date:"H:i:s" }}</div></td>
+            <td class="small">{{ event.actor_display }}{% if event.actor_ip %}<div class="row-note mono">{{ event.actor_ip }}</div>{% endif %}</td>
+            <td class="small nowrap">
+              {% if event.action == "disqualified" or event.action == "login_failed" %}
+                <span class="badge badge--danger">{{ event.get_action_display }}</span>
+              {% elif event.action == "override" or event.action == "waive" or event.action == "key_backup" %}
+                <span class="badge badge--warn">{{ event.get_action_display }}</span>
+              {% else %}
+                {{ event.get_action_display }}
+              {% endif %}
+            </td>
+            <td class="small">{{ event.entity_type }}{% if event.entity_label %}<div class="row-note">{{ event.entity_label }}</div>{% endif %}</td>
+            <td class="small">{{ event.summary }}</td>
+            <td class="right"><a class="btn btn--sm" href="{% url 'reporting:audit_event_detail' event.pk %}">Detail</a></td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="empty"><strong>No entries match</strong>Try widening the filters.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if page.has_other_pages %}
+    <div class="pager">
+      {% if page.has_previous %}<a class="btn btn--sm" href="?page={{ page.previous_page_number }}">Previous</a>{% endif %}
+      <span class="small muted">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+      {% if page.has_next %}<a class="btn btn--sm" href="?page={{ page.next_page_number }}">Next</a>{% endif %}
+    </div>
+  {% endif %}
+</div>

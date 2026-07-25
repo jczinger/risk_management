@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Complete: {{ instance.definition.name }}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ instance.definition.name }}</h1>
+    <p class="lede">
+      For <a href="{% url 'org:volunteer_detail' instance.volunteer.pk %}">{{ instance.volunteer.display_name }}</a>
+      · {{ instance.definition.cadence_display }}
+    </p>
+  </div>
+</div>
+
+{% if dependency %}
+  <div class="callout callout--warning">
+    <h3>Out of order</h3>
+    <p class="mb0">
+      Your policy expects <strong>{{ dependency.definition.name }}</strong> to be satisfied
+      first, and it is currently {{ dependency.get_status_display|lower }}. You can still
+      record this — but if you are working through a live application rather than filing
+      historical paperwork, deal with that one first.
+    </p>
+  </div>
+{% endif %}
+
+{% if instance.definition.description %}
+  <div class="callout callout--muted">
+    <p class="mb0 small">{{ instance.definition.description|linebreaksbr }}</p>
+  </div>
+{% endif %}
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">Mark complete</button>
+      <a class="btn" href="{% url 'org:volunteer_detail' instance.volunteer.pk %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% if instance.definition.is_recurring %}
+  <p class="small muted">
+    The next renewal is counted from the completion date you enter, not from today.
+  </p>
+{% endif %}
+{% endblock %}

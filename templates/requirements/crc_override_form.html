@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Leadership decision{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Leadership decision</h1>
+    <p class="lede">
+      On the discretionary flag from the check dated {{ record.report_date|date:"j F Y" }} for
+      <a href="{% url 'org:volunteer_detail' volunteer.pk %}">{{ volunteer.display_name }}</a>
+    </p>
+  </div>
+</div>
+
+<div class="callout callout--permanent">
+  <h3>This record is permanent and cannot be edited</h3>
+  <p class="mb0">
+    Once saved, it stands. If circumstances change, record a new decision — the earlier one
+    stays visible. Both the reasoning and the mitigation steps are mandatory, because a
+    decision without them is not a defensible one: this is what leadership, your insurer or
+    your district will read if they ever ask why this person was allowed to serve.
+  </p>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--danger">Record this decision permanently</button>
+      <a class="btn" href="{% url 'requirements:crc_detail' record.pk %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<div class="callout callout--muted">
+  <h3>What to write</h3>
+  <ul class="mb0 small">
+    <li>
+      <strong>Reasoning</strong> — what was disclosed, how long ago, what the person said
+      about it, and why leadership concluded what it did.
+    </li>
+    <li>
+      <strong>Mitigation</strong> — the concrete safeguards. Never alone with children, a
+      named supervisor, a restricted role, a review date. "Will be monitored" is not a
+      mitigation step; "serves only in the sanctuary, never in the nursery, reviewed each
+      September by the board" is.
+    </li>
+  </ul>
+</div>
+
+<p class="small muted">
+  Both fields are encrypted with your church's key. Declining ends this volunteer's
+  positions of trust.
+</p>
+{% endblock %}

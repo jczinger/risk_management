@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Reminder emails{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Reminder emails</h1>
+    <p class="lede">
+      Delivery history for the daily renewal digest. Recipients and message bodies are
+      encrypted; what you see here is the metadata.
+    </p>
+  </div>
+</div>
+
+<div class="card card--flush">
+  <div class="card-head"><h2>{{ total }} message{{ total|pluralize }}</h2></div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr><th>Sent</th><th>Status</th><th class="num">Recipients</th><th class="num">Requirements</th><th>Provider</th><th>Error</th></tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+          <tr>
+            <td class="small nowrap">{{ log.sent_at|date:"j M Y, H:i" }}</td>
+            <td>
+              {% if log.status == "sent" %}<span class="badge badge--ok">Sent</span>
+              {% elif log.status == "failed" %}<span class="badge badge--danger">Failed</span>
+              {% else %}<span class="badge badge--muted">Queued</span>{% endif %}
+            </td>
+            <td class="num">{{ log.recipient_count }}</td>
+            <td class="num">{{ log.item_count }}</td>
+            <td class="small">{{ log.provider|default:"—" }}</td>
+            <td class="small">{{ log.error|truncatechars:80|default:"—" }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="empty">
+            <strong>No reminders sent yet</strong>
+            The digest goes out overnight when something is coming due or has lapsed.
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if page.has_other_pages %}
+    <div class="pager">
+      {% if page.has_previous %}<a class="btn btn--sm" href="?page={{ page.previous_page_number }}">Previous</a>{% endif %}
+      <span class="small muted">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+      {% if page.has_next %}<a class="btn btn--sm" href="?page={{ page.next_page_number }}">Next</a>{% endif %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

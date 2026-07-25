@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% comment %}
+The Ministry Personnel file — the page a screening admin lives on.
+
+This is the one screen that decrypts a volunteer's personal fields, so it is also where
+`exact_age` is safe to use.
+{% endcomment %}
+
+{% block title %}{{ volunteer.display_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ volunteer.display_name }}</h1>
+    <p class="lede">
+      {% if volunteer.preferred_name and volunteer.preferred_name != volunteer.first_name %}
+        {{ volunteer.full_name }} ·
+      {% endif %}
+      Ministry Personnel file
+      {% if not volunteer.is_active %} · <span class="badge badge--muted">No longer serving since {{ volunteer.stopped_serving_on|date:"j M Y" }}</span>{% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'reporting:volunteer_file' volunteer.pk %}">Printable file</a>
+    <a class="btn" href="{% url 'org:volunteer_edit' volunteer.pk %}">Edit details</a>
+    {% if volunteer.is_active %}
+      <a class="btn" href="{% url 'org:volunteer_deactivate' volunteer.pk %}">No longer serving</a>
+    {% elif not volunteer.is_permanently_disqualified %}
+      <form method="post" action="{% url 'org:volunteer_reactivate' volunteer.pk %}">
+        {% csrf_token %}<button type="submit" class="btn">Return to service</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if volunteer.is_permanently_disqualified %}
+  <div class="callout callout--permanent">
+    <h3>Permanently disqualified</h3>
+    <p class="mb0">
+      An automatic disqualifier under the Plan to Protect policy was recorded on
+      {{ volunteer.screening_block_recorded_at|date:"j F Y" }}. This person is barred from
+      every position of trust. <strong>This determination is permanent and cannot be
+      overridden.</strong> Their file is retained.
+    </p>
+  </div>
+{% elif volunteer.is_blocked %}
+  <div class="callout callout--danger">
+    <h3>{{ volunteer.get_screening_block_display }}</h3>
+    <p class="mb0">
+      Recorded {{ volunteer.screening_block_recorded_at|date:"j F Y" }}. This volunteer
+      may not serve until the outcome is resolved — either a fingerprint-verified check
+      with the convictions disclosed and verified, or withdrawal.
+    </p>
+  </div>
+{% endif %}
+
+{% if onboarding_overdue %}
+  <div class="callout callout--warning">
+    <h3>Onboarding has run past three months</h3>
+    <p class="mb0">
+      The policy expects the whole onboarding sequence to finish within three months of
+      starting, with leadership approval signed and dated. Screening began more than
+      three months ago and approval is still outstanding.
+    </p>
+  </div>
+{% endif %}
+
+{% if not volunteer.has_birth_date %}
+  <div class="callout callout--warning">
+    <h3>Date of birth not recorded</h3>
+    <p class="mb0">
+      The age rules cannot be applied without it. Until it is entered, this person is
+      treated as under 18 — so the criminal record check shows as not applicable, which
+      may not be correct. <a href="{% url 'org:volunteer_edit' volunteer.pk %}">Add it now</a>.
+    </p>
+  </div>
+{% endif %}
+
+<div class="grid grid--4 mb1">
+  <div class="tile {% if buckets.overdue %}tile--danger{% endif %}">
+    <div class="n">{{ buckets.overdue }}</div><div class="k">Overdue</div>
+  </div>
+  <div class="tile {% if buckets.due_soon %}tile--warn{% endif %}">
+    <div class="n">{{ buckets.due_soon }}</div><div class="k">Coming due</div>
+  </div>
+  <div class="tile">
+    <div class="n">{{ buckets.outstanding }}</div><div class="k">In progress</div>
+  </div>
+  <div class="tile tile--ok">
+    <div class="n">{{ buckets.satisfied }}</div><div class="k">Satisfied</div>
+  </div>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <h2>Personal details</h2>
+    <p class="small faint">Encrypted at rest. Viewing this page is recorded in the audit trail.</p>
+    <dl class="facts">
+      <dt>Full name</dt><dd>{{ volunteer.full_name }}</dd>
+      <dt>Date of birth</dt>
+      <dd>
+        {% if volunteer.date_of_birth %}
+          {{ volunteer.date_of_birth|date:"j F Y" }}
+          {% if volunteer.exact_age is not None %}<span class="muted">(age {{ volunteer.exact_age }})</span>{% endif %}
+        {% else %}<span class="faint">Not recorded</span>{% endif %}
+      </dd>
+      <dt>Email</dt><dd>{{ volunteer.email|default:"—" }}</dd>
+      <dt>Phone</dt><dd>{{ volunteer.phone|default:"—" }}</dd>
+      <dt>Address</dt><dd>{% if volunteer.address %}{{ volunteer.address|linebreaksbr }}{% else %}—{% endif %}</dd>
+      <dt>Emergency contact</dt><dd>{% if volunteer.emergency_contact %}{{ volunteer.emergency_contact|linebreaksbr }}{% else %}—{% endif %}</dd>
+      <dt>Medical / allergies</dt><dd>{% if volunteer.medical_notes %}{{ volunteer.medical_notes|linebreaksbr }}{% else %}—{% endif %}</dd>
+    </dl>
+
+    <h3 class="mt2">Attendance</h3>
+    <dl class="facts">
+      <dt>Attending since</dt><dd>{{ volunteer.attendance_since|date:"j F Y"|default:"Not recorded" }}</dd>
+      <dt>Transfer</dt><dd>{% if volunteer.is_transfer %}Yes — from another church{% else %}No{% endif %}</dd>
+      <dt>Waiting period</dt>
+      <dd>
+        {% if volunteer.waiting_period_satisfied %}
+          <span class="badge badge--ok">Satisfied</span>
+          {% if volunteer.is_transfer %}<span class="small muted">by transfer exception</span>{% endif %}
+        {% else %}
+          <span class="badge badge--warn">Not yet — six months of regular attendance required</span>
+        {% endif %}
+      </dd>
+    </dl>
+
+    {% if volunteer.notes %}
+      <h3 class="mt2">Notes</h3>
+      <p class="small mb0">{{ volunteer.notes|linebreaksbr }}</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-head" style="padding:0 0 0.75rem; border-bottom:1px solid var(--line-soft)">
+      <h2>Roles</h2>
+    </div>
+
+    {% for assignment in assignments %}
+      <div class="req" style="padding-left:0; padding-right:0">
+        <div class="req-main">
+          <div class="req-name">
+            <a href="{% url 'org:role_detail' assignment.role.pk %}">{{ assignment.role.name }}</a>
+            {% if assignment.role.is_leadership %}<span class="badge badge--info">{{ assignment.role.get_leadership_display }}</span>{% endif %}
+          </div>
+          <div class="req-meta">
+            {{ assignment.role.department.name }} ·
+            from {{ assignment.started_on|date:"j M Y" }}
+            {% if assignment.ended_on %} to {{ assignment.ended_on|date:"j M Y" }}{% endif %}
+            {% if assignment.role.handles_personal_info %} · handles personal information{% endif %}
+            {% if not assignment.role.is_position_of_trust %} · not a position of trust{% endif %}
+          </div>
+        </div>
+        <div class="req-status">
+          {% if assignment.is_active %}
+            <form method="post" action="{% url 'org:assignment_end' assignment.pk %}">
+              {% csrf_token %}
+              <input type="hidden" name="ended_on" value="{% now 'Y-m-d' %}">
+              <button type="submit" class="btn btn--sm">End</button>
+            </form>
+          {% else %}
+            <span class="badge badge--muted">Ended</span>
+          {% endif %}
+        </div>
+      </div>
+    {% empty %}
+      <p class="muted">No roles yet. Assigning one is what makes requirements apply.</p>
+    {% endfor %}
+
+    {% if volunteer.is_active %}
+      <form method="post" action="{% url 'org:assignment_create' volunteer.pk %}" class="mt1">
+        {% csrf_token %}
+        {% include "partials/form.html" with form=assignment_form %}
+        <button type="submit" class="btn btn--primary">Assign to a role</button>
+      </form>
+      {% if volunteer.is_permanently_disqualified %}
+        <p class="small muted">
+          Only roles that are not positions of trust are offered, because of the permanent
+          disqualification above.
+        </p>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+{% include "requirements/_instance_group.html" with title="Onboarding" instances=onboarding volunteer=volunteer %}
+{% include "requirements/_instance_group.html" with title="Recurring requirements" instances=recurring volunteer=volunteer %}
+
+<div class="card card--flush">
+  <div class="card-head">
+    <h2>Criminal record checks</h2>
+    {% if volunteer.is_active and not volunteer.is_permanently_disqualified %}
+      <a class="btn btn--sm btn--primary" href="{% url 'requirements:crc_create' volunteer.pk %}">Record a check</a>
+    {% endif %}
+  </div>
+
+  {% for record in crc_records %}
+    <div class="req">
+      <div class="req-main">
+        <div class="req-name">
+          <a href="{% url 'requirements:crc_detail' record.pk %}">{{ record.report_date|date:"j F Y" }}</a>
+          {% if record.is_fingerprint_verified %}<span class="badge badge--info">Fingerprint-verified</span>{% endif %}
+          {% if record.superseded_by_id %}<span class="badge badge--muted">Superseded</span>{% endif %}
+        </div>
+        <div class="req-meta">
+          {% if record.includes_vulnerable_sector %}Includes vulnerable sector search{% else %}<strong>No vulnerable sector search</strong>{% endif %}
+          {% if record.issuing_body %} · {{ record.issuing_body }}{% endif %}
+          {% if record.is_cleared %} · valid to {{ record.expires_on|date:"j M Y" }}{% endif %}
+        </div>
+      </div>
+      <div class="req-status">
+        {% if record.is_cleared %}
+          <span class="badge badge--ok">Cleared</span>
+        {% else %}
+          <span class="badge badge--danger">Not Clear</span>
+          {% if record.not_clear_outcome %}<span class="badge badge--muted">{{ record.get_not_clear_outcome_display }}</span>{% endif %}
+        {% endif %}
+      </div>
+    </div>
+  {% empty %}
+    <div class="empty">
+      <strong>No criminal record check on file</strong>
+      {% if volunteer.is_minor %}
+        Volunteers under 18 are exempt. The check is activated automatically on the 1st of
+        their birth month in the year they turn 18.
+      {% else %}
+        Required every three years for adults in a position of trust.
+      {% endif %}
+    </div>
+  {% endfor %}
+</div>
+
+<div class="card card--flush">
+  <div class="card-head">
+    <h2>Documents</h2>
+    <a class="btn btn--sm" href="{% url 'documents:create' volunteer.pk %}">Add a document</a>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Label</th><th>Kind</th><th>Date</th><th>Held as</th></tr></thead>
+      <tbody>
+        {% for document in documents %}
+          <tr>
+            <td><a href="{% url 'documents:detail' document.pk %}">{{ document.title }}</a></td>
+            <td class="small">{{ document.get_kind_display }}</td>
+            <td class="small nowrap">{{ document.document_date|date:"j M Y"|default:"—" }}</td>
+            <td class="small">
+              {% if document.mode == "store" %}<span class="badge badge--ok">Encrypted file</span>
+              {% elif document.mode == "link" %}<span class="badge badge--info">External link</span>
+              {% else %}<span class="badge badge--muted">Hard copy</span>{% endif %}
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="4" class="empty"><strong>No documents recorded</strong></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="btn-row">
+  <form method="post" action="{% url 'org:volunteer_resync' volunteer.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="btn btn--sm">Recalculate requirements</button>
+  </form>
+  <a class="btn btn--sm" href="{% url 'reporting:audit_trail' %}?entity_type=Volunteer&entity_id={{ volunteer.pk }}">
+    Audit trail for this volunteer
+  </a>
+</div>
+{% endblock %}

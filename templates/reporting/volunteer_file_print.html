@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% comment %}
+The complete Ministry Personnel file for one volunteer, printable (Build Spec §8).
+
+Unlike the compliance report, this one *does* show decrypted personal details — it is one
+person's own file, produced for their record, for leadership, or for an audit.
+{% endcomment %}
+
+{% block title %}Ministry Personnel file — {{ volunteer.full_name }}{% endblock %}
+{% block body_attrs %}{% if pdf %} class="pdf"{% endif %}{% endblock %}
+{% block nav %}{% endblock %}
+
+{% block content %}
+<div class="print-head">
+  <h1>Ministry Personnel file</h1>
+  <div class="meta">
+    <strong>{{ volunteer.full_name }}</strong>
+    · {{ church_name }}
+    · Produced {{ as_of|date:"j F Y" }}
+  </div>
+</div>
+
+{% if not pdf %}
+  <div class="no-print btn-row mb1">
+    <button type="button" class="btn btn--primary" onclick="window.print()">Print this file</button>
+    <a class="btn" href="?format=pdf">Download as PDF</a>
+    <a class="btn" href="{% url 'org:volunteer_detail' volunteer.pk %}">Back to the record</a>
+  </div>
+
+  <div class="callout callout--warning no-print">
+    <p class="mb0">
+      This page shows {{ volunteer.display_name }}'s personal information in full, including
+      their date of birth, address and any medical notes. Printing it creates a paper record
+      that is no longer protected by this system's encryption — file it the way your policy
+      requires.
+    </p>
+  </div>
+{% endif %}
+
+<div class="card">
+  <h2>Personal details</h2>
+  <dl class="facts">
+    <dt>Full name</dt><dd>{{ volunteer.full_name }}</dd>
+    {% if volunteer.preferred_name %}<dt>Known as</dt><dd>{{ volunteer.preferred_name }}</dd>{% endif %}
+    <dt>Date of birth</dt>
+    <dd>
+      {% if volunteer.date_of_birth %}{{ volunteer.date_of_birth|date:"j F Y" }}{% if volunteer.exact_age is not None %} (age {{ volunteer.exact_age }}){% endif %}
+      {% else %}Not recorded{% endif %}
+    </dd>
+    <dt>Email</dt><dd>{{ volunteer.email|default:"—" }}</dd>
+    <dt>Phone</dt><dd>{{ volunteer.phone|default:"—" }}</dd>
+    <dt>Address</dt><dd>{% if volunteer.address %}{{ volunteer.address|linebreaksbr }}{% else %}—{% endif %}</dd>
+    <dt>Emergency contact</dt><dd>{% if volunteer.emergency_contact %}{{ volunteer.emergency_contact|linebreaksbr }}{% else %}—{% endif %}</dd>
+    <dt>Medical / allergies</dt><dd>{% if volunteer.medical_notes %}{{ volunteer.medical_notes|linebreaksbr }}{% else %}—{% endif %}</dd>
+    <dt>Attending since</dt><dd>{{ volunteer.attendance_since|date:"j F Y"|default:"Not recorded" }}</dd>
+    <dt>Transfer</dt><dd>{% if volunteer.is_transfer %}Yes, from another church{% else %}No{% endif %}</dd>
+    <dt>Currently serving</dt>
+    <dd>{% if volunteer.is_active %}Yes{% else %}No — since {{ volunteer.stopped_serving_on|date:"j F Y" }}{% endif %}</dd>
+    <dt>Screening standing</dt>
+    <dd>
+      {% if volunteer.is_permanently_disqualified %}
+        <strong>PERMANENTLY DISQUALIFIED from all positions of trust</strong>
+        (recorded {{ volunteer.screening_block_recorded_at|date:"j F Y" }}; no override available)
+      {% elif volunteer.is_blocked %}
+        <strong>{{ volunteer.get_screening_block_display }}</strong>
+        (recorded {{ volunteer.screening_block_recorded_at|date:"j F Y" }})
+      {% else %}
+        No block recorded
+      {% endif %}
+    </dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2>Roles held</h2>
+  <table class="data">
+    <thead><tr><th>Department</th><th>Role</th><th>Flags</th><th>From</th><th>To</th></tr></thead>
+    <tbody>
+      {% for assignment in assignments %}
+        <tr>
+          <td>{{ assignment.role.department.name }}</td>
+          <td>{{ assignment.role.name }}</td>
+          <td class="small">
+            {% if assignment.role.is_leadership %}{{ assignment.role.get_leadership_display }}{% endif %}
+            {% if assignment.role.is_position_of_trust %}{% if assignment.role.is_leadership %}, {% endif %}position of trust{% endif %}
+            {% if assignment.role.handles_personal_info %}, personal information{% endif %}
+          </td>
+          <td class="nowrap">{{ assignment.started_on|date:"j M Y" }}</td>
+          <td class="nowrap">{{ assignment.ended_on|date:"j M Y"|default:"current" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5">No roles recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Screening requirements</h2>
+  <table class="data">
+    <thead>
+      <tr><th>Requirement</th><th>Reference</th><th>How often</th><th>Status</th><th>Completed</th><th>Next due</th></tr>
+    </thead>
+    <tbody>
+      {% for instance in onboarding %}
+        <tr>
+          <td>{{ instance.definition.name }}</td>
+          <td class="small">{{ instance.definition.appendix_reference|default:"—" }}</td>
+          <td class="small nowrap">{{ instance.definition.cadence_display }}</td>
+          <td>
+            {{ instance.get_status_display }}
+            {% if instance.not_applicable_reason %}<div class="row-note">{{ instance.not_applicable_reason }}</div>{% endif %}
+            {% if instance.status == "waived" %}<div class="row-note">waived by {{ instance.waived_by }} on {{ instance.waived_on|date:"j M Y" }}</div>{% endif %}
+          </td>
+          <td class="nowrap">{{ instance.completed_on|date:"j M Y"|default:"—" }}</td>
+          <td class="nowrap">{{ instance.effective_due_date|date:"j M Y"|default:"—" }}</td>
+        </tr>
+      {% endfor %}
+      {% for instance in recurring %}
+        <tr>
+          <td>{{ instance.definition.name }}</td>
+          <td class="small">{{ instance.definition.appendix_reference|default:"—" }}</td>
+          <td class="small nowrap">{{ instance.definition.cadence_display }}</td>
+          <td>
+            {{ instance.get_status_display }}
+            {% if instance.not_applicable_reason %}<div class="row-note">{{ instance.not_applicable_reason }}</div>{% endif %}
+          </td>
+          <td class="nowrap">{{ instance.completed_on|date:"j M Y"|default:"—" }}</td>
+          <td class="nowrap">{{ instance.effective_due_date|date:"j M Y"|default:"—" }}</td>
+        </tr>
+      {% endfor %}
+      {% if not onboarding and not recurring %}
+        <tr><td colspan="6">No requirements apply yet.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Criminal record checks</h2>
+  <table class="data">
+    <thead>
+      <tr><th>Report date</th><th>Result</th><th>Vulnerable sector</th><th>Fingerprint</th><th>Valid until</th><th>Issued by</th></tr>
+    </thead>
+    <tbody>
+      {% for record in crc_records %}
+        <tr>
+          <td class="nowrap">{{ record.report_date|date:"j M Y" }}</td>
+          <td>
+            <strong>{{ record.get_result_display }}</strong>
+            {% if record.not_clear_outcome %}<div class="row-note">{{ record.get_not_clear_outcome_display }}</div>{% endif %}
+          </td>
+          <td>{% if record.includes_vulnerable_sector %}Yes{% else %}<strong>No</strong>{% endif %}</td>
+          <td>{% if record.is_fingerprint_verified %}Yes{% else %}No{% endif %}</td>
+          <td class="nowrap">{% if record.is_cleared %}{{ record.expires_on|date:"j M Y" }}{% else %}—{% endif %}</td>
+          <td class="small">{{ record.issuing_body|default:"—" }}</td>
+        </tr>
+        {% for conviction in record.convictions.all %}
+          <tr>
+            <td></td>
+            <td colspan="5" class="small">
+              {% if conviction.is_automatic_disqualifier %}
+                <strong>Automatic disqualifier — {{ conviction.category }}</strong> (permanent, no override)
+              {% else %}
+                Discretionary flag — {{ conviction.category }}
+              {% endif %}
+              {% if conviction.conviction_date %} · {{ conviction.conviction_date|date:"j M Y" }}{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        {% for override in record.overrides.all %}
+          <tr>
+            <td></td>
+            <td colspan="5" class="small">
+              <strong>Leadership decision: {{ override.get_decision_display }}</strong>
+              by {{ override.decided_by }} on {{ override.decided_on|date:"j M Y" }}
+              <div><em>Reasoning:</em> {{ override.reasoning }}</div>
+              <div><em>Mitigation:</em> {{ override.mitigation_steps }}</div>
+            </td>
+          </tr>
+        {% endfor %}
+      {% empty %}
+        <tr>
+          <td colspan="6">
+            None on file.
+            {% if volunteer.is_minor %}Under 18 — exempt under the policy.{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Documents</h2>
+  <table class="data">
+    <thead><tr><th>Label</th><th>Kind</th><th>Date</th><th>Held as</th><th>Where</th></tr></thead>
+    <tbody>
+      {% for document in documents %}
+        <tr>
+          <td>{{ document.title }}</td>
+          <td class="small">{{ document.get_kind_display }}</td>
+          <td class="nowrap">{{ document.document_date|date:"j M Y"|default:"—" }}</td>
+          <td class="small">{{ document.get_mode_label|default:document.mode }}</td>
+          <td class="small">
+            {% if document.mode == "store" %}Encrypted in this system
+            {% elif document.mode == "link" %}{{ document.external_url|truncatechars:50 }}
+            {% else %}{{ document.physical_location|default:"—" }}{% endif %}
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5">No documents recorded.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="print-foot">
+  <p class="mb0">
+    Complete Ministry Personnel file for {{ volunteer.full_name }}, {{ church_name }},
+    produced {{ as_of|date:"j F Y" }} from the Volunteer Management System. This record is
+    retained permanently. It contains personal information — handle and store it according to
+    your privacy policy and BC PIPA.
+  </p>
+</div>
+{% endblock %}
