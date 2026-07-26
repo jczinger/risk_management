@@ -142,14 +142,12 @@ This is the one screen that decrypts a volunteer's personal fields, so it is als
         <div class="req-main">
           <div class="req-name">
             <a href="{% url 'org:role_detail' assignment.role.pk %}">{{ assignment.role.name }}</a>
-            {% if assignment.role.is_leadership %}<span class="badge badge--info">{{ assignment.role.get_leadership_display }}</span>{% endif %}
+            {% if assignment.role.is_leadership %}<span class="badge badge--info">Leadership</span>{% endif %}
           </div>
           <div class="req-meta">
             {{ assignment.role.department.name }} ·
             from {{ assignment.started_on|date:"j M Y" }}
             {% if assignment.ended_on %} to {{ assignment.ended_on|date:"j M Y" }}{% endif %}
-            {% if assignment.role.handles_personal_info %} · handles personal information{% endif %}
-            {% if not assignment.role.is_position_of_trust %} · not a position of trust{% endif %}
           </div>
         </div>
         <div class="req-status">

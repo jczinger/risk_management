@@ -246,7 +246,9 @@ permanently — the policy requires it, and so does the law for records involvin
 as no longer serving; the file is kept and they can return to service later.
 
 **A church says someone was disqualified by mistake.** An automatic disqualification cannot be
-lifted by anyone, including the operator. There is no code path for it. If a conviction was
+lifted by anyone, including the operator. There is no code path for it. Note that it now bars
+them from **every** role, not just positions of trust — every role is one — so there is no
+lesser position they can be moved into meanwhile. If a conviction was
 recorded in error, that is a data-integrity incident: it needs a documented decision and a direct
 database correction by the operator, and it should leave a written record outside this system
 explaining what happened and why.

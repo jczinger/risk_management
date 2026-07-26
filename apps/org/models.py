@@ -8,11 +8,12 @@ The church's organisational model and the volunteer file.
 
 Two things here are load-bearing for the rest of the system:
 
-* **Role flags.** ``leadership`` marks directors and secretaries — who are screened
-  exactly like anyone else (Build Spec §3), the flag only records that the position
-  is a leadership one. ``handles_personal_info`` is what the seeded Confidentiality
-  Agreement requirement targets. Requirements match roles through these flags, so
-  they are plaintext and queryable.
+* **Role flags.** ``is_leadership`` is the only one, and it marks a leadership position —
+  screened exactly like anyone else (Build Spec §3), the flag only records what the
+  position *is*. Requirements match roles through it, so it is plaintext and queryable.
+  It grants access to nothing: every screening admin at a church sees that church's whole
+  file, and there are no volunteer or leader logins at all. Every role is treated as a
+  position of trust and as handling personal information, so neither is a flag.
 * **The volunteer's date of birth is split.** ``birth_year`` and ``birth_month`` are
   plaintext integers, because the age rules have to be *queryable* — a nightly job
   finds everyone turning 18 this month. The full date is a separate encrypted field.
@@ -43,14 +44,6 @@ from apps.core.models import NoDeleteModel, NoDeleteQuerySet, TimeStampedModel
 
 #: Nobody in the system predates this; guards against a typo'd birth year.
 EARLIEST_BIRTH_YEAR = 1900
-
-
-class LeadershipFlag(models.TextChoices):
-    """Which leadership position a role represents, if any (Build Spec §3)."""
-
-    NONE = "none", "Not a leadership role"
-    DIRECTOR = "director", "Director"
-    SECRETARY = "secretary", "Secretary"
 
 
 class Department(TimeStampedModel, NoDeleteModel):
@@ -108,31 +101,21 @@ class Role(TimeStampedModel, NoDeleteModel):
         help_text="Plain-text description of the position and its responsibilities.",
     )
 
-    leadership = models.CharField(
-        max_length=16,
-        choices=LeadershipFlag.choices,
-        default=LeadershipFlag.NONE,
-        db_index=True,
-        help_text=(
-            "Directors and secretaries are screened exactly like any other volunteer; "
-            "this only records that the position is a leadership one."
-        ),
-    )
-    handles_personal_info = models.BooleanField(
+    is_leadership = models.BooleanField(
         default=False,
         db_index=True,
+        verbose_name="leadership role",
         help_text=(
-            "Tick for roles with access to personal information. Requirements such as "
-            "the Confidentiality Agreement target this flag."
+            "Tick for directors, coordinators and other leadership positions. They are "
+            "screened exactly like any other volunteer (Build Spec §3); this only lets "
+            "requirements target leadership roles. It grants no access to anything."
         ),
     )
-    is_position_of_trust = models.BooleanField(
-        default=True,
-        help_text=(
-            "Positions of trust require full screening. Untick only for roles with no "
-            "access to children, youth or vulnerable adults."
-        ),
-    )
+    # There are deliberately no `handles_personal_info` or `is_position_of_trust`
+    # flags. Every role in this system is both: a church only enters a volunteer here
+    # because they are being screened, and everyone who serves encounters personal
+    # information about the people they serve. Making them tickable invited a church to
+    # untick one and quietly screen someone less. See BUILD_NOTES.md §1.14.
 
     is_active = models.BooleanField(default=True)
 
@@ -149,10 +132,6 @@ class Role(TimeStampedModel, NoDeleteModel):
 
     def get_absolute_url(self):
         return reverse("org:role_detail", args=[self.pk])
-
-    @property
-    def is_leadership(self) -> bool:
-        return self.leadership != LeadershipFlag.NONE
 
     @property
     def active_assignment_count(self) -> int:
@@ -508,11 +487,7 @@ class Volunteer(TimeStampedModel, NoDeleteModel):
 
     @property
     def needs_leadership_screening(self) -> bool:
-        return self.active_roles.exclude(leadership=LeadershipFlag.NONE).exists()
-
-    @property
-    def handles_personal_info(self) -> bool:
-        return self.active_roles.filter(handles_personal_info=True).exists()
+        return self.active_roles.filter(is_leadership=True).exists()
 
     # -- Waiting period ---------------------------------------------------
 
@@ -575,18 +550,22 @@ class RoleAssignment(TimeStampedModel, NoDeleteModel):
         if not self.is_active and not self.ended_on:
             errors["ended_on"] = "Record when this assignment ended."
 
-        # A permanently disqualified volunteer may not be placed in a position of
-        # trust. Enforced here as well as in the view, so no code path can bypass it.
+        # A permanently disqualified volunteer may not be placed in any role. Enforced
+        # here as well as in the view, so no code path can bypass it.
+        #
+        # This used to exempt roles that were not marked a position of trust, which was
+        # the only way a disqualified person could still be given something to do. Every
+        # role is now a position of trust by definition, so the exemption is gone and
+        # disqualification means they cannot serve anywhere.
         if (
             self.is_active
             and self.volunteer_id
             and self.role_id
-            and self.role.is_position_of_trust
             and self.volunteer.is_permanently_disqualified
         ):
             errors["role"] = (
-                "This volunteer is permanently disqualified from positions of trust "
-                "under the Plan to Protect policy and cannot be assigned to this role."
+                "This volunteer is permanently disqualified under the Plan to Protect "
+                "policy and cannot be assigned to any role."
             )
 
         if errors:

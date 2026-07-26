@@ -333,17 +333,33 @@ class AutomaticDisqualifierTests(CRCBase):
         with self.assertRaises(ValidationError):
             assignment.full_clean()
 
-    def test_can_still_hold_a_role_that_is_not_a_position_of_trust(self):
+    def test_cannot_hold_any_role_at_all(self):
         """
-        The bar is on positions of trust specifically, not on every conceivable involvement.
+        Disqualification now bars every role, not just positions of trust.
+
+        There used to be an escape hatch: a role with ``is_position_of_trust`` unticked
+        could still be assigned to a disqualified volunteer. Every role is a position of
+        trust as of BUILD_NOTES.md §1.14, so the hatch is closed — and this asserts it
+        stays closed for a role that sounds harmless.
         """
         from apps.org.models import RoleAssignment
 
         self._disqualify()
-        greeter = self.make_role(self.department, "Bulletin Folder", is_position_of_trust=False)
+        folder = self.make_role(self.department, "Bulletin Folder")
 
-        assignment = RoleAssignment(volunteer=self.volunteer, role=greeter)
-        assignment.full_clean()  # must not raise
+        assignment = RoleAssignment(volunteer=self.volunteer, role=folder)
+        with self.assertRaises(ValidationError):
+            assignment.full_clean()
+
+    def test_disqualification_ends_every_assignment_not_just_trusted_ones(self):
+        from apps.org.models import RoleAssignment
+
+        folder = self.make_role(self.department, "Bulletin Folder")
+        RoleAssignment.objects.create(volunteer=self.volunteer, role=folder)
+
+        self._disqualify()
+
+        self.assertFalse(self.volunteer.assignments.filter(is_active=True).exists())
 
     def test_cannot_be_reactivated_into_service_through_the_view(self):
         self._disqualify()

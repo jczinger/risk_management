@@ -12,7 +12,18 @@ to themselves and defeat the point.
 {% block main_class %}class="narrow"{% endblock %}
 {% block nav %}{% endblock %}
 
-{% block head %}<meta name="referrer" content="no-referrer">{% endblock %}
+{% comment %}
+Do NOT add <meta name="referrer" content="no-referrer"> here.
+
+It was here once, to keep this page's URL out of Referer headers. It bought nothing —
+the key is in the body, not the URL — and it broke the confirmation form: per the Fetch
+spec a document with referrer policy "no-referrer" sends `Origin: null` on any non-GET
+request, and Django's CSRF middleware rejects that with "Origin checking failed - null
+does not match any trusted origins", which is a hard 403 with no way past it.
+
+Cross-origin referrer leakage is already handled globally by SECURE_REFERRER_POLICY =
+"same-origin". Guarded by test_no_post_form_page_suppresses_the_referrer.
+{% endcomment %}
 
 {% block content %}
 <div class="page-head">

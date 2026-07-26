@@ -123,7 +123,7 @@ so the age exemption is not merely cosmetic.
   - a later cleared check cannot undo it;
   - `record_discretionary_override` refuses, both with and without naming the conviction;
   - the recorded conviction cannot be deleted;
-  - assignment to a position of trust is refused;
+  - assignment to **any** role is refused — every role is a position of trust;
   - reactivation through the view is refused;
   - **no URL reverses** to lifting it (`test_there_is_no_url_that_lifts_a_disqualification`);
   - the CRC detail page omits the override link entirely and says "no override".

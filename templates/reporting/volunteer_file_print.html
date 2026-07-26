@@ -81,9 +81,8 @@ person's own file, produced for their record, for leadership, or for an audit.
           <td>{{ assignment.role.department.name }}</td>
           <td>{{ assignment.role.name }}</td>
           <td class="small">
-            {% if assignment.role.is_leadership %}{{ assignment.role.get_leadership_display }}{% endif %}
-            {% if assignment.role.is_position_of_trust %}{% if assignment.role.is_leadership %}, {% endif %}position of trust{% endif %}
-            {% if assignment.role.handles_personal_info %}, personal information{% endif %}
+            {# Every role is a position of trust, so only leadership is worth printing. #}
+            {% if assignment.role.is_leadership %}leadership{% endif %}
           </td>
           <td class="nowrap">{{ assignment.started_on|date:"j M Y" }}</td>
           <td class="nowrap">{{ assignment.ended_on|date:"j M Y"|default:"current" }}</td>

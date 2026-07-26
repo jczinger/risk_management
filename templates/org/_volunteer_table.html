@@ -31,7 +31,7 @@ volunteer_list.html for the full page.
               {% for assignment in volunteer.current_assignments %}
                 <div>
                   {{ assignment.role.department.name }} → {{ assignment.role.name }}
-                  {% if assignment.role.is_leadership %}<span class="badge badge--info">{{ assignment.role.get_leadership_display }}</span>{% endif %}
+                  {% if assignment.role.is_leadership %}<span class="badge badge--info">Leadership</span>{% endif %}
                 </div>
               {% empty %}
                 <span class="faint">No current role</span>

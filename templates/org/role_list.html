@@ -23,9 +23,7 @@
             <td class="small"><a href="{% url 'org:department_detail' role.department.pk %}">{{ role.department.name }}</a></td>
             <td><a href="{% url 'org:role_detail' role.pk %}"><strong>{{ role.name }}</strong></a></td>
             <td class="pill-row">
-              {% if role.is_leadership %}<span class="badge badge--info">{{ role.get_leadership_display }}</span>{% endif %}
-              {% if role.is_position_of_trust %}<span class="badge badge--warn">Position of trust</span>{% endif %}
-              {% if role.handles_personal_info %}<span class="badge badge--muted">Personal information</span>{% endif %}
+              {% if role.is_leadership %}<span class="badge badge--info">Leadership</span>{% endif %}
             </td>
             <td class="num">{{ role.holders }}</td>
             <td>{% if role.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</td>

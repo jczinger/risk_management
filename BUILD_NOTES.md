@@ -213,7 +213,66 @@ half-authenticated state without a session — deferred rather than half-built.
 **Cost:** one extra indexed lookup per schema per sign-in attempt. At district scale that is
 a handful of primary-key hits, once per attempt, not per request.
 
-### 1.13 Deliberate omissions
+### 1.13 Leadership is a flag, not a job title
+
+**Changed 2026-07-25, at the operator's request.** Build Spec §3 line 44 specifies
+`leadership flag (director / secretary / none)`. It is now a plain boolean,
+`Role.is_leadership`.
+
+**Why the distinction was dead weight.** Director vs Secretary drove nothing. The
+requirement engine only ever asks whether a role is a leadership role at all —
+`applies_to = leadership` matched `leadership != NONE` — and the specific value appeared
+in exactly one badge and one dropdown label. No seeded requirement targets leadership,
+no report groups by it, and no rule treats a director differently from a secretary. A
+church that wants the distinction already has a better place for it: the role's name.
+
+**Migration.** `org/0002` adds the boolean, sets it True for every existing Director or
+Secretary, then drops the old column. The reverse restores `director` for flagged roles,
+since the two values cannot be told apart once collapsed — noted in the migration rather
+than left for someone to discover during a rollback.
+
+**What did not change.** Leadership roles are screened exactly like any other volunteer,
+which was the actual point of §3. `leadership_approval` — the requirement *type* for the
+sign-off on a volunteer's completed file — is a separate concept and is untouched.
+
+### 1.14 Every role is a position of trust, and handles personal information
+
+**Changed 2026-07-25, at the operator's request.** `Role.handles_personal_info` and
+`Role.is_position_of_trust` are gone. Build Spec §3 has both as per-role flags.
+
+**The reasoning:** a church only enters someone here because they are being screened, and
+anyone who serves encounters personal information about the people they serve. Both flags
+were therefore true for every real role — and offering them as ticks was worse than
+useless, because unticking one was a way to quietly screen a volunteer less than the
+policy requires, with nothing in the interface flagging it.
+
+**Knock-on effects, all intended:**
+
+* The `AppliesTo` options "Roles that handle personal information" and "Positions of
+  trust" are removed. A dead dropdown option would let an admin build a requirement that
+  silently matches nobody.
+* The two seeded requirements that used them — **Criminal Record Check** and
+  **Confidentiality Agreement** — now target `all`. Both apply to every volunteer.
+* **A permanently disqualified volunteer can no longer hold any role.** This is the sharp
+  one. There used to be an escape hatch: a role with `is_position_of_trust` unticked could
+  still be assigned to them, so a disqualified person could be given something harmless to
+  do. With every role a position of trust the hatch closes — disqualification now means
+  they cannot serve anywhere. `disqualify()` ends *every* active assignment rather than
+  just the trusted ones, and the assignment form says why instead of rendering an empty
+  dropdown. Asserted in `test_cannot_hold_any_role_at_all`.
+
+**Migrations.** `requirements.0002` retargets the affected definitions to `all` and
+narrows the choices; `org.0003` drops the two columns and *depends on* the requirements
+migration, so the engine is never left querying a column that has gone. Neither is
+meaningfully reversible — once retargeted there is no record of which definitions meant
+which flag — and both say so.
+
+**Widening a target means volunteers pick requirements up.** Existing volunteers who were
+not previously covered acquire the Confidentiality Agreement and the criminal record check
+on the next reconcile: the nightly sweep, or `sync_volunteer_requirements` on the next
+edit. Nothing is retroactively marked overdue that was not already due.
+
+### 1.15 Deliberate omissions
 
 Checked against Build Spec §0 ("DO NOT BUILD"). No code exists for: in-app forms or
 e-signature; Markdown role-description editing, versioning or acknowledgement tracking;
@@ -329,7 +388,7 @@ Recorded because each was a real defect, not a style preference.
 
 ## 5. Verification performed
 
-Full detail in `docs/ACCEPTANCE.md`. Summary: 425 automated tests pass, and the Docker Compose
+Full detail in `docs/ACCEPTANCE.md`. Summary: 428 automated tests pass, and the Docker Compose
 stack was brought up from a clean host, provisioned, backed up, destroyed and restored, with the
 restored personal data confirmed readable and still ciphertext at rest.
 

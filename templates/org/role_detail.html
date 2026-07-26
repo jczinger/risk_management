@@ -18,9 +18,7 @@
     <h2>About this role</h2>
     <dl class="facts">
       <dt>Department</dt><dd>{{ role.department.name }}</dd>
-      <dt>Leadership</dt><dd>{{ role.get_leadership_display }}</dd>
-      <dt>Position of trust</dt><dd>{% if role.is_position_of_trust %}Yes — full screening required{% else %}No{% endif %}</dd>
-      <dt>Personal information</dt><dd>{% if role.handles_personal_info %}Yes{% else %}No{% endif %}</dd>
+      <dt>Leadership</dt><dd>{% if role.is_leadership %}Yes{% else %}No{% endif %}</dd>
       <dt>Status</dt><dd>{% if role.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</dd>
     </dl>
     {% if role.description %}

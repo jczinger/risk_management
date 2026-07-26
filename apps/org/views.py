@@ -146,9 +146,7 @@ def role_create(request):
             entity_label=str(role),
             summary=f"Role created in {role.department.name}",
             detail={
-                "leadership": role.leadership,
-                "position_of_trust": role.is_position_of_trust,
-                "handles_personal_info": role.handles_personal_info,
+                "leadership": role.is_leadership,
             },
         )
         messages.success(request, f"Role '{role.name}' created.")
@@ -189,9 +187,7 @@ def role_edit(request, pk: int):
     role = get_object_or_404(Role, pk=pk)
     before = {
         "name": role.name,
-        "leadership": role.leadership,
-        "is_position_of_trust": role.is_position_of_trust,
-        "handles_personal_info": role.handles_personal_info,
+        "leadership": role.is_leadership,
         "is_active": role.is_active,
     }
 
@@ -200,9 +196,7 @@ def role_edit(request, pk: int):
         form.save()
         after = {
             "name": role.name,
-            "leadership": role.leadership,
-            "is_position_of_trust": role.is_position_of_trust,
-            "handles_personal_info": role.handles_personal_info,
+            "leadership": role.is_leadership,
             "is_active": role.is_active,
         }
         audit.record(

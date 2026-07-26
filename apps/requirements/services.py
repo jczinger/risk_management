@@ -525,12 +525,11 @@ def _apply_permanent_disqualification(
     """
     Enact an automatic disqualification. Irreversible by design.
 
-    Ends every current position-of-trust assignment and sets the permanent block.
+    Ends every current assignment and sets the permanent block. Every role is a position
+    of trust, so there is nothing left they could be moved sideways into.
     """
     ended = []
-    for assignment in volunteer.assignments.filter(
-        is_active=True, role__is_position_of_trust=True
-    ).select_related("role"):
+    for assignment in volunteer.assignments.filter(is_active=True).select_related("role"):
         assignment.end()
         ended.append(assignment.role.name)
 
@@ -613,9 +612,7 @@ def record_discretionary_override(
     volunteer = crc_record.volunteer
     if decision == DiscretionaryOverride.Decision.DECLINED:
         volunteer.set_screening_block(ScreeningBlock.WITHDRAWN)
-        for assignment in volunteer.assignments.filter(
-            is_active=True, role__is_position_of_trust=True
-        ):
+        for assignment in volunteer.assignments.filter(is_active=True):
             assignment.end()
     else:
         # Approved: lift the Not Clear block. The check itself still has to be

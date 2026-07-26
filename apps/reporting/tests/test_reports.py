@@ -19,7 +19,6 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.core.tests.base import TenantTestCase
-from apps.org.models import LeadershipFlag
 from apps.requirements.models import CRCResult, RequirementStatus, RequirementType
 from apps.requirements.services import (
     mark_requirement_complete,
@@ -45,7 +44,7 @@ class ReportingBase(TenantTestCase):
         self.youth = self.make_department("Youth")
         self.teacher = self.make_role(self.children, "Sunday School Teacher")
         self.director = self.make_role(
-            self.children, "Director", leadership=LeadershipFlag.DIRECTOR
+            self.children, "Director", is_leadership=True
         )
         self.youth_leader = self.make_role(self.youth, "Youth Leader")
 
@@ -90,7 +89,7 @@ class EndToEndOnboardingTests(ReportingBase):
 
         report = build_compliance_report()
         row = next(r for r in report["rows"] if r.volunteer.pk == volunteer.pk)
-        self.assertEqual(len(row.instances), 13)  # 14 seeded, minus the confidentiality one
+        self.assertEqual(len(row.instances), 14)  # every seeded item applies to every role
         self.assertFalse(row.is_compliant)
         self.assertEqual(row.status_label, "In progress")
         self.assertGreater(row.outstanding_count, 0)

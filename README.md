@@ -13,8 +13,9 @@ There are no volunteer or pastor logins in Stage 1.
 
 ## What it does
 
-- **Departments → Roles → Volunteers.** Role flags (leadership, position of trust, handles
-  personal information) determine which requirements apply to whom.
+- **Departments → Roles → Volunteers.** Every role is treated as a position of trust that
+  handles personal information, so screening is uniform; a `leadership` flag lets a church
+  target extra requirements at leadership positions.
 - **A requirement engine** seeded with the 14-item Plan to Protect template and fully editable
   per church — rename, re-time, add, deactivate.
 - **Age rules.** Under-18s are screened identically but exempt from the criminal record check,
@@ -129,7 +130,7 @@ work in development without TLS.
 .venv/bin/python -m pytest apps/requirements  # one area
 ```
 
-425 tests, including the `pg_dump` leak check, tenant isolation, shared-hostname routing, the
+428 tests, including the `pg_dump` leak check, tenant isolation, shared-hostname routing, the
 age rules, and a render sweep over every page.
 
 ---

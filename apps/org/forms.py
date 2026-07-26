@@ -26,9 +26,7 @@ class RoleForm(forms.ModelForm):
             "department",
             "name",
             "description",
-            "leadership",
-            "is_position_of_trust",
-            "handles_personal_info",
+            "is_leadership",
             "is_active",
         ]
         widgets = {
@@ -160,16 +158,22 @@ class RoleAssignmentForm(forms.ModelForm):
             held = volunteer.assignments.filter(is_active=True).values_list("role_id", flat=True)
             queryset = queryset.exclude(pk__in=list(held))
 
-            # A permanently disqualified volunteer cannot be placed in a position of
-            # trust. The model refuses it too; excluding them here means the admin is
-            # never offered an option that will be rejected.
+            # A permanently disqualified volunteer cannot be placed in any role, since
+            # every role is a position of trust. Emptying the list would render a silent
+            # blank dropdown, so say why instead — the model refuses the assignment
+            # regardless, this only stops the admin discovering that by trial.
             if volunteer.is_permanently_disqualified:
-                queryset = queryset.filter(is_position_of_trust=False)
+                queryset = queryset.none()
+                self.fields["role"].empty_label = None
+                self.fields["role"].help_text = (
+                    "This volunteer is permanently disqualified under the Plan to "
+                    "Protect policy and cannot be assigned to any role."
+                )
 
         self.fields["role"].queryset = queryset
         self.fields["role"].label_from_instance = (
             lambda role: f"{role.department.name} → {role.name}"
-            + (f" ({role.get_leadership_display()})" if role.is_leadership else "")
+            + (" (leadership)" if role.is_leadership else "")
         )
 
     def clean(self):

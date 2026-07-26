@@ -484,6 +484,69 @@ class KeyBackupGateTests(ConsoleTestCase):
 
             self.church_client.force_login(User.objects.get())
 
+    def test_the_gate_survives_a_browsers_csrf_origin_check(self):
+        """
+        A real browser sends an ``Origin`` header on a form POST; Django checks it.
+
+        Every other test in this file runs with CSRF enforcement off, so the gate's
+        happy path was only ever exercised without it. This one turns it on and supplies
+        the header a browser would.
+
+        It does *not* catch the ``no-referrer`` defect that actually broke this page —
+        the test client sends whatever Origin it is handed and cannot derive ``null``
+        from a meta tag. ``test_no_page_with_a_form_suppresses_the_referrer`` is the
+        regression test for that.
+        """
+        client = Client(HTTP_HOST="gatech.testserver", enforce_csrf_checks=True)
+        with tenant_context(self.church):
+            from apps.accounts.models import User
+
+            client.force_login(User.objects.get())
+
+        page = client.get("/key-backup/")
+        token = page.context["csrf_token"]
+
+        response = client.post(
+            "/key-backup/",
+            {
+                "confirmed": "on",
+                "fingerprint_check": self.church.dek_fingerprint[-4:],
+                "csrfmiddlewaretoken": str(token),
+            },
+            HTTP_ORIGIN="http://gatech.testserver",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.church.refresh_from_db()
+        self.assertFalse(self.church.key_backup_pending)
+
+    def test_no_page_with_a_form_suppresses_the_referrer(self):
+        """
+        Root cause of the 403 above, guarded at the source.
+
+        ``no-referrer`` on a document makes the browser send ``Origin: null`` for every
+        non-GET request from it, which Django's CSRF middleware refuses. Any page with a
+        POST form must therefore leave the referrer policy alone —
+        ``SECURE_REFERRER_POLICY = "same-origin"`` already covers cross-origin leakage.
+        """
+        import re
+        from pathlib import Path
+
+        from django.conf import settings
+
+        # Strip {% comment %} blocks first, so the note explaining this rule in
+        # key_backup.html does not trip the rule.
+        comments = re.compile(r"\{%\s*comment\s*%\}.*?\{%\s*endcomment\s*%\}", re.S)
+
+        offenders = [
+            str(template.relative_to(settings.BASE_DIR))
+            for template in Path(settings.BASE_DIR, "templates").rglob("*.html")
+            for body in [comments.sub("", template.read_text())]
+            if 'method="post"' in body and "no-referrer" in body
+        ]
+
+        self.assertEqual(offenders, [], f"These pages would 403 on submit: {offenders}")
+
     def test_confirming_requires_both_the_checkbox_and_the_fingerprint(self):
         # Neither: refused.
         response = self.church_client.post("/key-backup/", {})

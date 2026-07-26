@@ -99,7 +99,6 @@ class DumpLeakageTests(TransactionTestCase):
         self.role = Role.objects.create(
             department=self.department,
             name="Sunday School Teacher",
-            handles_personal_info=True,
         )
 
     def tearDown(self):

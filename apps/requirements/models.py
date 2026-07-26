@@ -33,7 +33,7 @@ from django.utils import timezone
 
 from apps.core.fields import EncryptedTextField
 from apps.core.models import NoDeleteModel, NoDeleteQuerySet, TimeStampedModel
-from apps.org.models import LeadershipFlag, Role, Volunteer
+from apps.org.models import Role, Volunteer
 
 #: How long "due soon" means on the dashboard (Build Spec §7).
 DUE_SOON_DAYS = 60
@@ -81,13 +81,18 @@ class Cadence(models.TextChoices):
 
 
 class AppliesTo(models.TextChoices):
-    """Which roles a requirement attaches to."""
+    """
+    Which roles a requirement attaches to.
+
+    Two options are deliberately absent. "Roles that handle personal information" and
+    "Positions of trust" were dropped once every role in this system became both by
+    definition — see BUILD_NOTES.md §1.14. A requirement that would have used either now
+    uses ``ALL_ROLES``, which is what they had come to mean.
+    """
 
     ALL_ROLES = "all", "Everyone"
     SPECIFIC_ROLES = "specific", "Only the selected roles"
     LEADERSHIP = "leadership", "Roles flagged as leadership"
-    HANDLES_PERSONAL_INFO = "personal_info", "Roles that handle personal information"
-    POSITIONS_OF_TRUST = "trust", "Positions of trust"
 
 
 class AgeRule(models.TextChoices):
@@ -141,12 +146,8 @@ class RequirementDefinitionQuerySet(models.QuerySet):
         """Definitions that attach to ``role`` through any of the applies_to rules."""
         query = models.Q(applies_to=AppliesTo.ALL_ROLES)
         query |= models.Q(applies_to=AppliesTo.SPECIFIC_ROLES, roles=role)
-        if role.leadership != LeadershipFlag.NONE:
+        if role.is_leadership:
             query |= models.Q(applies_to=AppliesTo.LEADERSHIP)
-        if role.handles_personal_info:
-            query |= models.Q(applies_to=AppliesTo.HANDLES_PERSONAL_INFO)
-        if role.is_position_of_trust:
-            query |= models.Q(applies_to=AppliesTo.POSITIONS_OF_TRUST)
         return self.filter(query).distinct()
 
 
@@ -304,11 +305,7 @@ class RequirementDefinition(TimeStampedModel, NoDeleteModel):
         if self.applies_to == AppliesTo.SPECIFIC_ROLES:
             return self.roles.filter(pk=role.pk).exists()
         if self.applies_to == AppliesTo.LEADERSHIP:
-            return role.leadership != LeadershipFlag.NONE
-        if self.applies_to == AppliesTo.HANDLES_PERSONAL_INFO:
-            return role.handles_personal_info
-        if self.applies_to == AppliesTo.POSITIONS_OF_TRUST:
-            return role.is_position_of_trust
+            return role.is_leadership
         return False
 
     def applies_to_volunteer(self, volunteer: Volunteer, roles=None) -> bool:

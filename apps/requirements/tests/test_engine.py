@@ -13,7 +13,7 @@ from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from apps.core.tests.base import TenantTestCase
-from apps.org.models import LeadershipFlag, ScreeningBlock
+from apps.org.models import ScreeningBlock
 from apps.requirements.models import (
     AgeRule,
     AppliesTo,
@@ -117,7 +117,8 @@ class SeedTemplateTests(TenantTestCase):
         )
         self.assertEqual(crc.cadence, Cadence.EVERY_3_YEARS)
         self.assertEqual(crc.age_rule, AgeRule.ADULTS_ONLY)
-        self.assertEqual(crc.applies_to, AppliesTo.POSITIONS_OF_TRUST)
+        # Everyone: every role is a position of trust (BUILD_NOTES.md §1.14).
+        self.assertEqual(crc.applies_to, AppliesTo.ALL_ROLES)
 
         refresher = RequirementDefinition.objects.get(
             requirement_type=RequirementType.TRAINING_REFRESHER
@@ -130,7 +131,7 @@ class SeedTemplateTests(TenantTestCase):
         self.assertEqual(orientation.cadence, Cadence.ONE_TIME)
 
         confidentiality = RequirementDefinition.objects.get(name="Confidentiality Agreement")
-        self.assertEqual(confidentiality.applies_to, AppliesTo.HANDLES_PERSONAL_INFO)
+        self.assertEqual(confidentiality.applies_to, AppliesTo.ALL_ROLES)
         self.assertEqual(confidentiality.cadence, Cadence.ONE_TIME)
 
         for name in ("Code of Conduct", "Covenant of Care"):
@@ -196,10 +197,10 @@ class ApplicabilityTests(TenantTestCase):
         self.department = self.make_department()
         self.helper = self.make_role(self.department, "Helper")
         self.director = self.make_role(
-            self.department, "Director", leadership=LeadershipFlag.DIRECTOR
+            self.department, "Director", is_leadership=True
         )
-        self.registrar = self.make_role(self.department, "Registrar", handles_personal_info=True)
-        self.greeter = self.make_role(self.department, "Greeter", is_position_of_trust=False)
+        self.registrar = self.make_role(self.department, "Registrar")
+        self.greeter = self.make_role(self.department, "Greeter")
 
     def test_all_roles_requirement_applies_to_everyone(self):
         definition = RequirementDefinition.objects.create(
@@ -217,23 +218,24 @@ class ApplicabilityTests(TenantTestCase):
         self.assertTrue(definition.applies_to_role(self.director))
         self.assertFalse(definition.applies_to_role(self.helper))
 
-    def test_personal_info_requirement_targets_that_flag(self):
-        definition = RequirementDefinition.objects.create(
-            name="Confidentiality",
-            requirement_type=RequirementType.SIGNED_AGREEMENT,
-            applies_to=AppliesTo.HANDLES_PERSONAL_INFO,
-        )
-        self.assertTrue(definition.applies_to_role(self.registrar))
-        self.assertFalse(definition.applies_to_role(self.helper))
+    def test_the_retired_targets_are_no_longer_offered(self):
+        """
+        "Handles personal information" and "Positions of trust" are gone.
 
-    def test_position_of_trust_requirement_skips_non_trust_roles(self):
-        definition = RequirementDefinition.objects.create(
-            name="Trust only",
-            requirement_type=RequirementType.CRIMINAL_RECORD_CHECK,
-            applies_to=AppliesTo.POSITIONS_OF_TRUST,
-        )
-        self.assertTrue(definition.applies_to_role(self.helper))
-        self.assertFalse(definition.applies_to_role(self.greeter))
+        Every role is both, so a requirement that would have used either applies to
+        everyone. Asserted on the choices themselves: leaving a dead option in the
+        dropdown would let an admin build a requirement that silently matches nobody.
+        """
+        offered = {value for value, _ in AppliesTo.choices}
+        self.assertEqual(offered, {"all", "specific", "leadership"})
+
+    def test_the_confidentiality_agreement_reaches_every_volunteer(self):
+        """The reason the personal-information flag was removed, stated as behaviour."""
+        seed_default_template()
+        confidentiality = RequirementDefinition.objects.get(name="Confidentiality Agreement")
+
+        for role in (self.helper, self.director, self.registrar, self.greeter):
+            self.assertTrue(confidentiality.applies_to_role(role), role.name)
 
     def test_specific_roles_requirement_matches_only_the_selection(self):
         definition = RequirementDefinition.objects.create(
@@ -271,7 +273,7 @@ class SyncTests(TenantTestCase):
         self.seed()
         self.department = self.make_department()
         self.role = self.make_role(self.department, "Sunday School Teacher")
-        self.registrar = self.make_role(self.department, "Registrar", handles_personal_info=True)
+        self.registrar = self.make_role(self.department, "Registrar")
 
     def test_no_roles_means_no_requirements(self):
         volunteer = self.make_volunteer()
@@ -284,23 +286,24 @@ class SyncTests(TenantTestCase):
         self.assign(volunteer, self.role)
         sync_volunteer_requirements(volunteer)
 
-        # 14 seeded, minus the confidentiality agreement which targets a flag this role
-        # does not have.
-        self.assertEqual(volunteer.requirement_instances.count(), 13)
-        self.assertFalse(
+        # All 14 seeded items. Nothing in the template targets a role flag any more —
+        # the Confidentiality Agreement used to be conditional and is now universal.
+        self.assertEqual(volunteer.requirement_instances.count(), 14)
+        self.assertTrue(
             volunteer.requirement_instances.filter(
                 definition__name="Confidentiality Agreement"
             ).exists()
         )
 
-    def test_personal_info_role_picks_up_the_confidentiality_agreement(self):
-        volunteer = self.make_volunteer()
-        self.assign(volunteer, self.registrar)
+    def test_an_ordinary_role_owes_the_criminal_record_check(self):
+        """Also no longer conditional: every role is a position of trust."""
+        volunteer = self.make_volunteer(age=34)
+        self.assign(volunteer, self.role)
         sync_volunteer_requirements(volunteer)
 
         self.assertTrue(
             volunteer.requirement_instances.filter(
-                definition__name="Confidentiality Agreement"
+                definition__requirement_type=RequirementType.CRIMINAL_RECORD_CHECK
             ).exists()
         )
 
@@ -345,25 +348,36 @@ class SyncTests(TenantTestCase):
         self.assertEqual(interview.status, RequirementStatus.NOT_APPLICABLE)
         self.assertEqual(volunteer.requirement_instances.count(), 14)
 
-    def test_ticking_personal_info_on_a_role_requires_it_of_current_holders(self):
-        """Changing a role's flags must flow through to everyone serving in it."""
+    def test_flagging_a_role_as_leadership_requires_it_of_current_holders(self):
+        """
+        Changing a role's flag must flow through to everyone already serving in it.
+
+        Previously written against ``handles_personal_info``; ``is_leadership`` is the
+        only role flag left, and the propagation behaviour is what matters here.
+        """
+        covenant = RequirementDefinition.objects.create(
+            name="Ministry Leader Covenant",
+            requirement_type=RequirementType.SIGNED_AGREEMENT,
+            applies_to=AppliesTo.LEADERSHIP,
+        )
+
         volunteer = self.make_volunteer()
         self.assign(volunteer, self.role)
         sync_volunteer_requirements(volunteer)
         self.assertFalse(
             volunteer.requirement_instances.filter(
-                definition__name="Confidentiality Agreement",
+                definition=covenant,
                 status__in=RequirementStatus.outstanding_values(),
             ).exists()
         )
 
-        self.role.handles_personal_info = True
+        self.role.is_leadership = True
         self.role.save()
         sync_volunteer_requirements(volunteer)
 
         self.assertTrue(
             volunteer.requirement_instances.filter(
-                definition__name="Confidentiality Agreement",
+                definition=covenant,
                 status=RequirementStatus.NOT_STARTED,
             ).exists()
         )

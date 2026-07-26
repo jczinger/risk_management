@@ -148,13 +148,13 @@ SEED_TEMPLATE: list[dict] = [
         "name": "Criminal Record Check + Vulnerable Sector Search",
         "requirement_type": RequirementType.CRIMINAL_RECORD_CHECK,
         "cadence": Cadence.EVERY_3_YEARS,
-        "applies_to": AppliesTo.POSITIONS_OF_TRUST,
+        "applies_to": AppliesTo.ALL_ROLES,
         "age_rule": AgeRule.ADULTS_ONLY,
         "sequence": 90,
         "is_onboarding": False,
         "requires_document": True,
         "description": (
-            "Required of everyone 18 and over in a position of trust, renewed every "
+            "Required of everyone 18 and over, renewed every "
             "three years from the date on the clearance letter. Volunteers under 18 "
             "are screened the same way but are exempt from this check; the system "
             "marks it not applicable and activates it automatically on the 1st of "
@@ -217,14 +217,14 @@ SEED_TEMPLATE: list[dict] = [
         "name": "Confidentiality Agreement",
         "requirement_type": RequirementType.SIGNED_AGREEMENT,
         "cadence": Cadence.ONE_TIME,
-        "applies_to": AppliesTo.HANDLES_PERSONAL_INFO,
+        "applies_to": AppliesTo.ALL_ROLES,
         "sequence": 140,
         "is_onboarding": False,
         "requires_document": True,
         "description": (
-            "Required of roles that handle personal information. Tick 'handles "
-            "personal information' on a role and this requirement applies to everyone "
-            "serving in it."
+            "Required of every volunteer. Anyone serving encounters personal "
+            "information about the people they serve, so the agreement is not "
+            "conditional on the role."
         ),
     },
 ]
