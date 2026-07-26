@@ -160,7 +160,60 @@ The nightly sweep re-runs the same reconciliation for everyone, so a missed sync
 within a day. The views also call `sync_volunteer_requirements` directly, so the count shown to
 the admin is accurate for that request.
 
-### 1.12 Deliberate omissions
+### 1.12 One hostname, church chosen by the sign-in address
+
+**Added 2026-07-25, after the initial build, at the operator's request.** This changes a
+decision the spec made explicitly (§1: schema-per-tenant resolved from the hostname), so it
+is recorded here in full rather than buried in a commit.
+
+**The ask:** every church signs in at one address — `vms.<base domain>` — instead of getting
+a subdomain. Per-church subdomains need a DNS record and a certificate each, which is real
+operational friction for a district tool.
+
+**The problem it creates:** django-tenants picks the Postgres schema from the Host header,
+before anything else runs. If the hostname no longer identifies the church, nothing does
+until the sign-in form is submitted — and the session, which is what makes a request
+authenticated, lives *inside* a church's schema. You cannot read the session before you know
+the schema, and you cannot know the schema before you read the form.
+
+**What was built** (`apps/tenants/routing.py`):
+
+1. Sign-in happens in `public`. `find_login_targets()` searches `public` and every active
+   church for the submitted address, computing the blind index under each schema's own salt.
+2. On success the connection is bound to that church **for the rest of the request** — not in
+   a context manager, because the session is written during response processing and has to
+   land in the church's schema.
+3. The response carries a signed, host-only cookie naming the schema.
+   `VMSTenantMiddleware` reads it before anything else and binds the schema from it.
+
+**Why the session stays in the tenant schema.** The obvious alternative — move sessions to
+`public` and store the tenant id in them — would have been less code and materially worse.
+It would put a row per church admin in the operator's schema, and it would make the session
+the only thing separating churches. Keeping sessions where they are means the cookie is a
+*pointer, not a credential*: point it at another church and your session key does not exist
+there, so you arrive anonymous at the login page. That property is asserted directly in
+`test_a_valid_cookie_for_a_church_you_have_no_session_in_gives_nothing`.
+
+**Passkeys needed the same treatment.** A discoverable-credential login sends no address at
+all, so `find_passkey_target()` searches for the credential id across schemas instead. The
+credential id is opaque, unique and already plaintext, so searching for it leaks nothing the
+assertion does not already carry. The challenge row has to be consumed back in the schema
+that wrote it, or the update silently touches zero rows and leaves the challenge replayable.
+
+**Hostname routing was kept.** The cookie is host-only, so it is never sent to a church
+subdomain and the two schemes cannot fight. A church can still be given its own hostname;
+it is now opt-in (`--domain`) rather than the default, because the old default minted
+`<code>.<base domain>` for churches that had no DNS for it.
+
+**Known limitation.** If the same address *and* the same password exist at two churches,
+sign-in resolves to the first by church name. It is logged as a warning. One address should
+belong to one church; a proper fix would be a church chooser, which needs a way to hold the
+half-authenticated state without a session — deferred rather than half-built.
+
+**Cost:** one extra indexed lookup per schema per sign-in attempt. At district scale that is
+a handful of primary-key hits, once per attempt, not per request.
+
+### 1.13 Deliberate omissions
 
 Checked against Build Spec §0 ("DO NOT BUILD"). No code exists for: in-app forms or
 e-signature; Markdown role-description editing, versioning or acknowledgement tracking;
@@ -246,6 +299,8 @@ Recorded because each was a real defect, not a style preference.
 | `apps/core/keys.py` | `schema_context()` binds a lightweight `FakeTenant` carrying only a schema name, so key lookup failed for management commands and Celery tasks. | Fall back to reading the wrapped key from the registry by schema name, with a per-process cache. |
 | `apps/core/tests/base.py` | `FastTenantTestCase` shares one `Tenant` instance across a whole test class. A test that changed a church setting mutated it for every later test in that class, because the DB write rolled back but the in-memory attribute did not. Two test classes were silently reading the previous test's settings. | `refresh_from_db()` in `setUp`. |
 | `apps/core/tests/test_dump_leakage.py` | The leak check initially passed vacuously: `pg_dump` opens its own connection and cannot see rows inside a test's open transaction, so the dump was empty. | Moved to `TransactionTestCase` with a really provisioned church, plus a guard test asserting the dump contains the seeded row. |
+| `apps/core/audit.py` | **Pre-existing.** `audit.record()` writes `AuditEvent`, which is a tenant table — so any call from the `public` schema raised `UndefinedTable`. Reachable before shared hosting (a mistyped password on the operator's console 500'd) and unavoidable after it, since sign-in is handled in `public`. | Degrade to a log line outside a tenant schema. Console actions that belong to a church already switch into its schema first, so those still record properly. Covered by `AuditOutsideATenantTests`. |
+| `apps/core/middleware.py` | A tenant cookie with a bad signature was ignored but never cleared, so the browser resent it on every request and each one logged a warning. | Drop the cookie whenever it is present but unusable — forged, tampered with, or naming a church that has been suspended or removed. |
 
 ---
 
@@ -274,6 +329,11 @@ Recorded because each was a real defect, not a style preference.
 
 ## 5. Verification performed
 
-Full detail in `docs/ACCEPTANCE.md`. Summary: 353 automated tests pass, and the Docker Compose
+Full detail in `docs/ACCEPTANCE.md`. Summary: 425 automated tests pass, and the Docker Compose
 stack was brought up from a clean host, provisioned, backed up, destroyed and restored, with the
 restored personal data confirmed readable and still ciphertext at rest.
+
+Shared-hostname routing (§1.12) was additionally verified against the running stack: an address
+belonging to a church resolves to that church's schema and issues a signed cookie for it, the
+super-admin's address reaches the console with no cookie, and a wrong password produces the
+same generic refusal as an address that exists nowhere.

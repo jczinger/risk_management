@@ -22,8 +22,19 @@ docker compose exec web python manage.py provision_church \
 `--document-mode` is one of `store` (encrypted in-system), `link` (their own document store), or
 `track` (hard copy, dates only). Omit `--admin-password` for a passkey-only account.
 
-Afterwards: escrow the printed key, and add the new subdomain to `CSRF_TRUSTED_ORIGINS` in `.env`
-followed by `docker compose up -d web`.
+Afterwards there is exactly one step: **escrow the printed key.** No DNS, no certificate, no
+`ALLOWED_HOSTS` edit — the new church signs in at the same address as everyone else, and their
+admin's email address is what selects them.
+
+### Giving a church its own hostname
+
+Optional, and rarely worth it. Pass `--domain church.example.ca` at provisioning (or fill in the
+hostname field in the console). Then it *does* need DNS pointing here, a certificate, and entries
+in both `ALLOWED_HOSTS` and `CSRF_TRUSTED_ORIGINS` in `.env`, followed by
+`docker compose up -d web`.
+
+Both routes work at once: a church with its own hostname is reachable there *and* through the
+shared address.
 
 ### Changing a church's settings
 
@@ -246,6 +257,16 @@ cover everything the policy review deferred.
 
 **Can a church see another church's data?** No. Separate Postgres schemas, separate encryption
 keys, separate sessions. Tested in `apps/tenants/tests/test_isolation.py`.
+
+**Everyone shares one web address — how does it know which church I am?** From the address you
+sign in with. The choice is then held in a signed cookie naming your church's schema. Editing
+that cookie does not get you into another church: your session only exists in your own schema,
+so you would land back at the sign-in page. Tested in `apps/tenants/tests/test_shared_host.py`.
+
+**Someone has admin accounts at two churches.** They need a different email address for each.
+If the same address and password exist at two churches, sign-in picks the first alphabetically
+and logs a warning — so give them `name+churchA@…` and `name+churchB@…`, which VMS treats as
+two distinct addresses.
 
 **Can the operator read a church's data?** Technically yes — the operator holds the master key.
 That is an accepted trade-off recorded in PRD §5, made in exchange for a guarantee that no church

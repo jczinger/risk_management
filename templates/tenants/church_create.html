@@ -31,9 +31,10 @@
     <legend>The church</legend>
     {% include "partials/form.html" with form=form %}
     <p class="helptext">
-      Tenant hostnames default to <code>&lt;short code&gt;.{{ base_domain }}</code>.
-      Whatever hostname you use must resolve to this server and be listed in
-      <code>ALLOWED_HOSTS</code>.
+      Churches normally sign in at <code>{{ base_domain }}</code>, and their email
+      address decides which church they land in — so leave the hostname blank. If you
+      do give a church its own hostname, it must resolve to this server and be listed
+      in <code>ALLOWED_HOSTS</code> and <code>CSRF_TRUSTED_ORIGINS</code>.
     </p>
   </fieldset>
 

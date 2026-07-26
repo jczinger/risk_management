@@ -48,9 +48,8 @@
               <td><a href="{% url 'tenants:church_detail' church.pk %}"><strong>{{ church.name }}</strong></a></td>
               <td class="mono">{{ church.schema_name }}</td>
               <td class="small">
-                {% with domain=church.primary_domain %}
-                  {% if domain %}{{ domain.domain }}{% else %}<span class="faint">none</span>{% endif %}
-                {% endwith %}
+                {{ church.hostname }}
+                {% if not church.has_own_hostname %}<span class="faint">(shared)</span>{% endif %}
               </td>
               <td class="small">{{ church.get_document_mode_display }}</td>
               <td>

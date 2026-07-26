@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from django import forms
-from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 
 from apps.core.blind_index import email_index, normalise_email
 
 from .models import User
+from .tenant_login import authenticate_across_schemas
 
 
 class EmailPasswordForm(forms.Form):
@@ -18,6 +18,12 @@ class EmailPasswordForm(forms.Form):
     Success here does **not** sign anyone in — it only establishes that the password is
     right, after which the TOTP step runs. The authenticated user is stashed on the
     form for the view to pick up.
+
+    On the shared hostname this step also decides *which church* the person belongs to,
+    which is why validating it has the side effect of binding the connection to that
+    church's schema. That is unusual for a form, and deliberate: the switch has to
+    happen before the session is written, and the session is written after the view
+    returns. ``self.target`` records where it landed so the view can set the cookie.
     """
 
     email = forms.EmailField(
@@ -39,6 +45,7 @@ class EmailPasswordForm(forms.Form):
     def __init__(self, request=None, *args, **kwargs):
         self.request = request
         self.user = None
+        self.target = None
         super().__init__(*args, **kwargs)
 
     def clean(self):
@@ -49,16 +56,18 @@ class EmailPasswordForm(forms.Form):
         if not email or not password:
             return cleaned
 
-        user = authenticate(self.request, username=email, password=password)
+        resolved = authenticate_across_schemas(self.request, email, password)
 
-        # Django's ModelBackend already refuses an inactive user, so this one message covers
-        # every failure: no such address, wrong password, and deactivated account. That is
-        # deliberate — a distinct "your account is deactivated" reply would confirm the
-        # address exists to anyone who guessed it.
-        if user is None:
+        # One message covers every failure: no such address, wrong password, deactivated
+        # account, and suspended church. That is deliberate — a distinct "your account is
+        # deactivated" reply would confirm the address exists to anyone who guessed it.
+        # The same reasoning applies across churches: the form must not reveal that an
+        # address is known at some *other* church either.
+        if resolved is None:
             raise forms.ValidationError(self.GENERIC_ERROR, code="invalid_login")
 
-        self.user = user
+        self.user = resolved.user
+        self.target = resolved.target
         return cleaned
 
 

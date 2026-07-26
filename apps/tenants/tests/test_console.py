@@ -188,15 +188,31 @@ class OnboardingThroughTheConsoleTests(ConsoleTestCase):
         self.assertNotIn("dek", response["Location"])
         self.assertEqual(response["Location"], console_url("tenants:church_key_shown", church.pk))
 
-    def test_the_hostname_defaults_from_the_short_code(self):
+    def test_a_blank_hostname_means_the_shared_address(self):
+        """
+        The normal case. This used to mint ``<short code>.<base domain>``, which created
+        a subdomain nobody had DNS or a certificate for; churches are now selected by
+        the address they sign in with instead.
+        """
         from django.conf import settings
 
         self.client.post(console_url("tenants:church_create"), self._form_data(domain_name=""))
         church = Tenant.objects.get(schema_name="consolech")
 
-        self.assertEqual(
-            church.primary_domain.domain, f"consolech.{settings.VMS_BASE_DOMAIN}"
+        self.assertIsNone(church.primary_domain)
+        self.assertFalse(church.has_own_hostname)
+        self.assertEqual(church.hostname, settings.VMS_BASE_DOMAIN)
+        self.assertEqual(church.url, f"https://{settings.VMS_BASE_DOMAIN}/")
+
+    def test_a_church_can_still_be_given_a_hostname_of_its_own(self):
+        self.client.post(
+            console_url("tenants:church_create"),
+            self._form_data(domain_name="consolech.testserver"),
         )
+        church = Tenant.objects.get(schema_name="consolech")
+
+        self.assertTrue(church.has_own_hostname)
+        self.assertEqual(church.hostname, "consolech.testserver")
 
     def test_a_duplicate_short_code_is_rejected_by_the_form(self):
         self.client.post(console_url("tenants:church_create"), self._form_data())

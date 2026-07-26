@@ -43,7 +43,8 @@ class ProvisionResult:
     """What the console needs after a successful provision."""
 
     tenant: Tenant
-    domain: Domain
+    #: None when the church is reached only through the shared platform address.
+    domain: Domain | None
     admin_email: str
     #: Base64 DEK. Shown once, then dropped. Never written to a log or the database.
     dek_b64: str
@@ -82,13 +83,15 @@ def provision_church(
     schema_name = (schema_name or "").strip().lower()
     validate_schema_name(schema_name)
 
+    # Optional. Blank means the church is reached through the shared platform address,
+    # where sign-in resolves the schema from the address rather than DNS. A hostname is
+    # only needed for a church that wants its own — which then costs a DNS record and a
+    # certificate, and is why it is no longer the default.
     domain_name = (domain_name or "").strip().lower()
-    if not domain_name:
-        raise ProvisioningError("A hostname is required so the church can be reached.")
 
     if Tenant.objects.filter(schema_name=schema_name).exists():
         raise ProvisioningError(f"A church already uses the schema '{schema_name}'.")
-    if Domain.objects.filter(domain=domain_name).exists():
+    if domain_name and Domain.objects.filter(domain=domain_name).exists():
         raise ProvisioningError(f"The hostname '{domain_name}' is already in use.")
 
     tenant = Tenant(
@@ -104,7 +107,11 @@ def provision_church(
     # Saving creates the schema and runs every tenant migration against it.
     tenant.save()
 
-    domain = Domain.objects.create(domain=domain_name, tenant=tenant, is_primary=True)
+    domain = (
+        Domain.objects.create(domain=domain_name, tenant=tenant, is_primary=True)
+        if domain_name
+        else None
+    )
 
     seeded = 0
     # The Tenant row is not yet committed, so connection.tenant cannot supply the
@@ -131,7 +138,7 @@ def provision_church(
             summary=f"Church provisioned ({tenant.get_document_mode_display()})",
             detail={
                 "schema": schema_name,
-                "hostname": domain_name,
+                "hostname": domain_name or "(shared platform address)",
                 "document_mode": document_mode,
                 "key_fingerprint": tenant.dek_fingerprint,
                 "seeded_requirements": seeded,
@@ -149,7 +156,7 @@ def provision_church(
     logger.info(
         "Provisioned church schema=%s hostname=%s key_fingerprint=%s seeded=%d",
         schema_name,
-        domain_name,
+        domain_name or "shared",
         tenant.dek_fingerprint,
         seeded,
     )

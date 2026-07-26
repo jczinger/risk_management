@@ -170,8 +170,9 @@ themselves.
 **Rate limiting.** Failed logins are limited per email address *and* per source IP — the first
 stops one account being ground down, the second stops one source spraying many.
 
-**Enumeration.** Wrong address, wrong password and deactivated account all produce the same
-message, so the login form cannot be used to discover who works at a church.
+**Enumeration.** Wrong address, wrong password, deactivated account and suspended church all
+produce the same message, so the login form cannot be used to discover who works at a church —
+or at which church someone works. See "Which church a request belongs to" below.
 
 ---
 
@@ -179,16 +180,44 @@ message, so the login form cannot be used to discover who works at a church.
 
 Two independent barriers, either of which would be sufficient:
 
-1. **Schema separation.** Every church's data is in its own Postgres schema, selected from the
-   request hostname. Primary keys are per-schema, so an id from one church resolves to nothing in
-   another. Sessions live in the tenant schema, so a cookie issued by one church is meaningless at
-   another.
+1. **Schema separation.** Every church's data is in its own Postgres schema. Primary keys are
+   per-schema, so an id from one church resolves to nothing in another. Sessions live in the
+   tenant schema, so a cookie issued by one church is meaningless at another.
 2. **Separate encryption keys.** Even if schema separation were bypassed — a bad raw query, a
    botched restore — one church's key cannot decrypt another's data.
 
-An unknown hostname is **refused** (`SHOW_PUBLIC_IF_NO_TENANT_FOUND = False`), so a stray DNS
-entry cannot reach the operator's console. The single exception is `/healthz/`, which answers on
-any hostname and returns nothing but `{"status": "ok"}`.
+### Which church a request belongs to
+
+Churches share one hostname, and the church is chosen by the address entered at sign-in. The
+choice is then carried in a **signed, host-only cookie** naming the schema, which the tenant
+middleware reads before anything else runs.
+
+The cookie is a **pointer, not a credential**, and that distinction is the whole security
+argument:
+
+* It is signed with `SECRET_KEY`, so it cannot be forged. An unsigned or tampered value is
+  ignored *and deleted*.
+* It names a schema; it does not authenticate anyone. The session that actually authorises a
+  request still lives inside that church's schema. Repoint the cookie at another church and
+  your session key does not exist over there — you arrive **anonymous at the login page**, not
+  inside someone else's data.
+* A cookie naming a suspended or unknown church is dropped and the visitor is treated as
+  signed out.
+* Signing out clears it, so the next person at that browser does not inherit the church.
+
+Tested in `apps/tenants/tests/test_shared_host.py`.
+
+A church can still be given a hostname of its own; that is opt-in per church. The cookie is
+host-only, so it is never sent to such a hostname and the two routing schemes cannot shadow
+each other. An unknown hostname is **refused** (`SHOW_PUBLIC_IF_NO_TENANT_FOUND = False`), so a
+stray DNS entry cannot reach the operator's console. The single exception is `/healthz/`, which
+answers on any hostname and returns nothing but `{"status": "ok"}`.
+
+**What the sign-in form does not reveal.** Resolving the church means searching every schema
+for the submitted address. A wrong password, an unknown address, a deactivated account and a
+suspended church all produce the same message, so the form cannot be used to discover that an
+address is known at *some other* church. An address found nowhere still costs one password
+hash, so response time does not distinguish the two either.
 
 The public schema holds no church data at all — only the registry, wrapped keys, and the
 super-admin. The console does not browse tenant data.

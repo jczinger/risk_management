@@ -35,6 +35,7 @@ from django_ratelimit.exceptions import Ratelimited
 
 from apps.core import audit
 from apps.core.models import AuditAction
+from apps.tenants.routing import clear_tenant_cookie, set_tenant_cookie
 
 from . import totp as totp_service
 from . import webauthn_service
@@ -68,6 +69,22 @@ def _post_login_redirect(request) -> str:
     ):
         return candidate
     return settings.LOGIN_REDIRECT_URL
+
+
+def _apply_tenant_cookie(response, target):
+    """
+    Record on the response which schema this browser is now signed in to.
+
+    ``target`` is None on the per-subdomain path, where the hostname already decides
+    and no cookie should be involved. A public target clears the cookie rather than
+    setting it — the operator's console *is* the no-cookie state, so leaving a stale
+    church cookie behind would send the super-admin into a church on their next click.
+    """
+    if target is None:
+        return response
+    if target.is_public:
+        return clear_tenant_cookie(response)
+    return set_tenant_cookie(response, target.schema_name)
 
 
 def _complete_login(request, user: User, method: str) -> HttpResponse:
@@ -124,23 +141,34 @@ def login_view(request):
             if form.is_valid():
                 user = form.user
 
-                # Password accepted, but the user is NOT logged in yet — the fallback
-                # path requires a second factor (Build Spec §1).
-                if user.has_totp:
-                    request.session[totp_service.PENDING_SESSION_KEY] = user.pk
-                    request.session[totp_service.PENDING_STARTED_KEY] = timezone.now().isoformat()
-                    return redirect(f"{reverse('accounts:totp_verify')}?next={_post_login_redirect(request)}")
+                # Validating the form may have switched schemas to the church this
+                # address belongs to. Start a clean session so it is created *there*
+                # rather than carrying over a public-schema session key.
+                if form.target is not None:
+                    request.session.flush()
 
-                # No TOTP yet. Let them in only as far as enrolment, which is
-                # mandatory before the password path is usable for anything else.
+                # Password accepted, but the user is NOT logged in yet — the fallback
+                # path requires a second factor (Build Spec §1). The tenant cookie is
+                # still set now, before the second factor: it only selects a schema,
+                # and an unauthenticated session in that schema grants nothing.
                 request.session[totp_service.PENDING_SESSION_KEY] = user.pk
                 request.session[totp_service.PENDING_STARTED_KEY] = timezone.now().isoformat()
-                messages.info(
-                    request,
-                    "Before you continue, set up an authenticator app. A password on "
-                    "its own is not enough to protect volunteers' personal information.",
-                )
-                return redirect("accounts:totp_setup_required")
+
+                if user.has_totp:
+                    destination = (
+                        f"{reverse('accounts:totp_verify')}?next={_post_login_redirect(request)}"
+                    )
+                else:
+                    # No TOTP yet. Let them in only as far as enrolment, which is
+                    # mandatory before the password path is usable for anything else.
+                    messages.info(
+                        request,
+                        "Before you continue, set up an authenticator app. A password on "
+                        "its own is not enough to protect volunteers' personal information.",
+                    )
+                    destination = reverse("accounts:totp_setup_required")
+
+                return _apply_tenant_cookie(redirect(destination), form.target)
             else:
                 _audit_failed_login(request, form)
 
@@ -199,7 +227,10 @@ def logout_view(request):
         )
     auth_logout(request)
     messages.success(request, "You have been signed out.")
-    return redirect("accounts:login")
+    # Drop the church selection too. Without this the next person at this browser
+    # would reach the church's login page rather than the shared one, and the
+    # previous user's church name would be visible in the page chrome.
+    return clear_tenant_cookie(redirect("accounts:login"))
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +269,11 @@ def webauthn_authenticate_finish(request):
         return JsonResponse({"error": str(exc)}, status=400)
 
     _complete_login(request, user, method="passkey")
-    return JsonResponse({"ok": True, "redirect": _post_login_redirect(request)})
+
+    # The ceremony may have resolved the church from the credential itself and
+    # switched schemas; carry that choice forward in the cookie.
+    response = JsonResponse({"ok": True, "redirect": _post_login_redirect(request)})
+    return _apply_tenant_cookie(response, getattr(request, "vms_login_target", None))
 
 
 @never_cache

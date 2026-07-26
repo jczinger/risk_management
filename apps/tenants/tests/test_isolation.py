@@ -184,10 +184,14 @@ class ProvisioningTests(ProvisioningTestCase):
         """
         Provisioning is one transaction. A failure part-way must not leave an orphan schema
         or a half-built church.
+
+        The failure is forced *after* the schema has been created and migrated — a blank
+        admin address, which the user manager refuses — because that is the case worth
+        proving. Postgres rolls DDL back with everything else, so the schema goes too.
         """
         before = Tenant.objects.count()
-        with self.assertRaises(ProvisioningError):
-            self._provision(code="beta", domain_name="")
+        with self.assertRaises(ValueError):
+            self._provision(code="beta", admin_email="")
 
         self.assertEqual(Tenant.objects.count(), before)
         with connection.cursor() as cursor:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from django import forms
-from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 
 from .models import DocumentMode, Domain, Tenant, validate_lead_days, validate_schema_name
@@ -33,10 +32,14 @@ class ProvisionChurchForm(forms.Form):
         widget=forms.TextInput(attrs={"placeholder": "firstoac", "autocapitalize": "none"}),
     )
     domain_name = forms.CharField(
-        label="Hostname",
+        label="Own hostname (optional)",
         max_length=253,
         required=False,
-        help_text="Leave blank to use <short code>.<base domain>.",
+        help_text=(
+            "Leave blank — the church signs in at the shared address, and their email "
+            "address selects them. Only fill this in if they need a hostname of their "
+            "own, which needs its own DNS record and certificate."
+        ),
         widget=forms.TextInput(attrs={"autocapitalize": "none"}),
     )
 
@@ -100,14 +103,11 @@ class ProvisionChurchForm(forms.Form):
 
     def clean(self):
         cleaned = super().clean()
-        schema = cleaned.get("schema_name")
         domain = cleaned.get("domain_name")
 
-        # Default the hostname from the short code so the common case is one field.
-        if not domain and schema:
-            domain = f"{schema}.{settings.VMS_BASE_DOMAIN}"
-            cleaned["domain_name"] = domain
-
+        # Blank is the normal case: no Domain row, and the church is reached through
+        # the shared address. Earlier this defaulted to <short code>.<base domain>,
+        # which minted a subdomain nobody had DNS for.
         if domain and Domain.objects.filter(domain=domain).exists():
             self.add_error("domain_name", f"'{domain}' already routes to another church.")
 

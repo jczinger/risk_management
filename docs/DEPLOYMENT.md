@@ -10,19 +10,27 @@ Docker and the Compose plugin; adjust package commands for other distributions.
 | Thing | Notes |
 |---|---|
 | A host with Docker + Compose plugin | 2 vCPU / 4 GB RAM is comfortable for the district |
-| A domain | e.g. `vms.example.ca`, with a wildcard `*.vms.example.ca` |
+| A domain | one hostname, e.g. `vms.example.ca` |
 | Nginx Proxy Manager | Already running, terminating SSL |
 | Keeper Security access | For the master key and each church's escrowed key |
 | An ACS Email resource | Canada geography, with SPF/DKIM/DMARC on the domain |
 
-**DNS.** Two records, both pointing at the host:
+**DNS.** One record, pointing at the host:
 
 ```
 vms.example.ca        A     <host IP>
-*.vms.example.ca      A     <host IP>
 ```
 
-The wildcard is what lets each church have its own subdomain without a DNS change per church.
+Every church signs in at that one address; which church you land in is decided by the email
+address you sign in with. Onboarding a church therefore needs no DNS change, no certificate and
+no config edit.
+
+A wildcard is only needed if you intend to give individual churches hostnames of their own,
+which is optional and off by default:
+
+```
+*.vms.example.ca      A     <host IP>          # optional
+```
 
 ---
 
@@ -66,8 +74,9 @@ DJANGO_SECRET_KEY=<from generate_key --secret-key>
 DEBUG=False
 
 # Keep `localhost` — the container's own health check probes over the internal network.
+# The leading-dot entry is only needed if churches will get hostnames of their own.
 ALLOWED_HOSTS=vms.example.ca,.vms.example.ca,localhost
-CSRF_TRUSTED_ORIGINS=https://vms.example.ca,https://firstoac.vms.example.ca
+CSRF_TRUSTED_ORIGINS=https://vms.example.ca
 VMS_BASE_DOMAIN=vms.example.ca
 VMS_HTTP_PORT=8020
 
@@ -90,8 +99,9 @@ EMAIL_HOST_PASSWORD=<entra app client secret>
 DEFAULT_FROM_EMAIL=no-reply@vms.example.ca
 ```
 
-`CSRF_TRUSTED_ORIGINS` needs an entry per hostname that submits forms. Add each church's
-subdomain as you onboard it, then `docker compose up -d web` to pick it up.
+`CSRF_TRUSTED_ORIGINS` needs an entry per hostname that submits forms. With shared hosting that
+is just the one, and onboarding a church needs no change here. Add an entry only if you give a
+church a hostname of its own, then `docker compose up -d web` to pick it up.
 
 ```bash
 chmod 600 .env
@@ -101,8 +111,8 @@ chmod 600 .env
 
 Django rejects an unlisted hostname before any middleware runs, so `localhost` must be present or
 the container health check fails and Docker will keep restarting a healthy `web`. The leading-dot
-form `.vms.example.ca` matches every subdomain, which is what makes onboarding a church a
-zero-config operation.
+form `.vms.example.ca` matches every subdomain; keep it if churches may get their own hostnames,
+drop it if they never will.
 
 ---
 
@@ -143,19 +153,19 @@ afterwards.
 
 ## 6. Point Nginx Proxy Manager at it
 
-Two proxy hosts, both forwarding to `127.0.0.1:8020` (or the host's Docker bridge address):
+One proxy host, forwarding to `127.0.0.1:8020` (or the host's Docker bridge address):
 
-**Platform console**
+**The platform**
 - Domain: `vms.example.ca`
 - Scheme `http`, forward host `127.0.0.1`, port `8020`
 - Block common exploits: on
 - Websockets: not needed
 - SSL: request a certificate, force SSL, HTTP/2, HSTS on
 
-**Churches (wildcard)**
-- Domain: `*.vms.example.ca`
-- Same forwarding
-- SSL: a wildcard certificate via DNS-01 (Let's Encrypt cannot issue a wildcard over HTTP-01)
+That single host serves both the operator's console and every church. Add a second, wildcard
+proxy host (`*.vms.example.ca`, same forwarding, wildcard certificate via DNS-01 — Let's Encrypt
+cannot issue a wildcard over HTTP-01) **only** if you intend to give churches hostnames of their
+own.
 
 Nginx Proxy Manager sets `X-Forwarded-Proto` by default, which is what tells Django the browser
 used HTTPS — `SECURE_PROXY_SSL_HEADER` in the settings honours it. Without that header, secure
@@ -190,14 +200,10 @@ administrator, and seeds the 14 Plan to Protect requirements.
 church's name and the fingerprint shown. If you lose it, it is still recoverable while the master
 key is intact (`manage.py export_tenant_key`), but escrow it now rather than relying on that.
 
-Add the new subdomain to `CSRF_TRUSTED_ORIGINS` in `.env` and restart `web`:
-
-```bash
-docker compose up -d web
-```
-
-The church's admin signs in at `https://firstoac.vms.example.ca/` and is held at a mandatory
-key-backup step until they confirm they have saved their own offline copy.
+Nothing else to configure. The church's admin signs in at the same
+`https://vms.example.ca/` as everyone else — their email address is what selects their church —
+and is held at a mandatory key-backup step until they confirm they have saved their own offline
+copy.
 
 ---
 
@@ -264,13 +270,29 @@ schema and every church automatically.
 ## Troubleshooting
 
 **404 on every page, health check fine.** The hostname has no `Domain` row. Unknown hostnames are
-refused on purpose. Check the church's hostname in the console, and that DNS resolves.
+refused on purpose. Check that DNS resolves to this host and that the hostname matches the one in
+the registry — for the shared address that is the row for the `public` schema.
 
 **400 Bad Request.** The hostname is not in `ALLOWED_HOSTS`.
 
 **CSRF verification failed.** The submitting hostname is missing from `CSRF_TRUSTED_ORIGINS`
-(scheme included, e.g. `https://firstoac.vms.example.ca`), or the proxy is not forwarding
+(scheme included, e.g. `https://vms.example.ca`), or the proxy is not forwarding
 `X-Forwarded-Proto`.
+
+**Signing in lands in the wrong church, or back at the login page.** The church comes from the
+signed `vms_tenant` cookie set at sign-in. Clear cookies for the site and sign in again. If a
+church was renamed at the schema level — which is not supported — the cookie will name a schema
+that no longer exists; it is dropped automatically and the visitor is returned to sign-in.
+
+**"That email address and password combination was not recognised" for a known-good account.**
+The address has to exist in exactly one church. Check with:
+
+```bash
+docker compose exec web python manage.py shell -c "from apps.tenants.routing import find_login_targets; print([(t.schema_name, t.label) for t in find_login_targets('admin@church.ca')])"
+```
+
+An empty list means no active account with that address anywhere — check the spelling, that the
+account is active, and that the church is not suspended.
 
 **`web` restarts repeatedly.** `docker compose logs web`. Most often a settings guard refusing to
 boot: a missing `PLATFORM_MASTER_KEY`, an empty `ALLOWED_HOSTS`, or a `DJANGO_SECRET_KEY` under 50

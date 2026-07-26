@@ -31,7 +31,9 @@ import logging
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.utils import timezone
+from django_tenants.utils import get_public_schema_name, schema_context
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -87,8 +89,6 @@ def _user_handle(user: User) -> bytes:
     email address — that would leak the address to any device the passkey syncs to.
     The primary key plus the schema is stable and meaningless outside VMS.
     """
-    from django.db import connection
-
     schema = getattr(connection, "schema_name", "public")
     return f"{schema}:{user.pk}".encode()
 
@@ -238,7 +238,20 @@ def finish_authentication(request, credential_json: str) -> User:
     Raises :class:`WebAuthnError` for every failure mode with a message safe to show —
     deliberately not distinguishing "no such credential" from "bad signature", so the
     page cannot be used to enumerate who has a passkey.
+
+    **Resolving the church.** A discoverable-credential sign-in carries no address, so
+    on the shared hostname this starts in the ``public`` schema with no idea which
+    church the credential belongs to. When the credential is not found locally the
+    search widens across every active church; on a hit the connection is bound there
+    for the rest of the request, and ``request.vms_login_target`` records it so the
+    view can set the tenant cookie.
+
+    The challenge row stays where it was written. Consuming it has to happen back in
+    that schema — otherwise the update would silently touch zero rows in the newly
+    bound schema and leave the challenge replayable for the rest of its five minutes.
     """
+    challenge_schema = connection.schema_name
+
     challenge = (
         WebAuthnChallenge.objects.filter(
             purpose=WebAuthnChallenge.PURPOSE_AUTHENTICATE,
@@ -251,16 +264,24 @@ def finish_authentication(request, credential_json: str) -> User:
     if challenge is None or not challenge.is_usable:
         raise WebAuthnError("That sign-in attempt has expired. Please try again.")
 
+    def consume_challenge() -> None:
+        with schema_context(challenge_schema):
+            challenge.consume()
+
     try:
         parsed = json.loads(credential_json)
         credential_id = parsed["id"]
     except (ValueError, KeyError, TypeError) as exc:
-        challenge.consume()
+        consume_challenge()
         raise WebAuthnError("The browser sent an unreadable passkey response.") from exc
 
     passkey = Passkey.objects.filter(credential_id=credential_id, is_active=True).first()
+
+    if passkey is None and challenge_schema == get_public_schema_name():
+        passkey = _bind_schema_owning_passkey(request, credential_id)
+
     if passkey is None:
-        challenge.consume()
+        consume_challenge()
         raise WebAuthnError("Sign-in failed. That passkey is not registered here.")
 
     try:
@@ -277,7 +298,7 @@ def finish_authentication(request, credential_json: str) -> User:
         logger.warning("Passkey assertion failed for credential %s: %s", credential_id[:12], exc)
         raise WebAuthnError("Sign-in failed. Please try again.") from exc
     finally:
-        challenge.consume()
+        consume_challenge()
 
     # Some authenticators legitimately always report 0; only a *decrease* from a
     # non-zero counter indicates a cloned credential.
@@ -291,6 +312,27 @@ def finish_authentication(request, credential_json: str) -> User:
         raise WebAuthnError("This account has been deactivated.")
 
     return user
+
+
+def _bind_schema_owning_passkey(request, credential_id: str) -> Passkey | None:
+    """
+    Find which church registered this credential, and switch the request to it.
+
+    Only reached on the shared hostname, where the request starts in the public schema.
+    Returns the passkey as loaded *inside* that church's schema, so the sign-count
+    update that follows writes to the right place.
+    """
+    from apps.tenants.routing import bind_tenant, find_passkey_target
+
+    target = find_passkey_target(credential_id)
+    if target is None or target.is_public:
+        # A public-schema credential would already have been found by the caller's
+        # local lookup, so there is nothing left to bind.
+        return None
+
+    bind_tenant(request, target.tenant)
+    request.vms_login_target = target
+    return Passkey.objects.filter(credential_id=credential_id, is_active=True).first()
 
 
 def remove_passkey(user: User, passkey_id: int) -> None:

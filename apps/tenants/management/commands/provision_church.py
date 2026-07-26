@@ -14,9 +14,16 @@ class Command(BaseCommand):
         parser.add_argument(
             "--code",
             required=True,
-            help="Short code: lowercase letters/digits. Becomes the subdomain and schema.",
+            help="Short code: lowercase letters/digits. Becomes the database schema.",
         )
-        parser.add_argument("--domain", help="Hostname. Defaults to <code>.<VMS_BASE_DOMAIN>.")
+        parser.add_argument(
+            "--domain",
+            default="",
+            help=(
+                "Give this church a hostname of its own. Omit for the normal case: the "
+                "church signs in at the shared address and is selected by email."
+            ),
+        )
         parser.add_argument("--admin-email", required=True)
         parser.add_argument("--admin-first-name", default="")
         parser.add_argument("--admin-last-name", default="")
@@ -37,9 +44,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from django.conf import settings
-
-        domain = options["domain"] or f"{options['code']}.{settings.VMS_BASE_DOMAIN}"
+        domain = options["domain"]
 
         try:
             result = provision_church(
@@ -59,7 +64,10 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(f"\nProvisioned: {result.tenant.name}"))
         self.stdout.write(f"  Schema:              {result.tenant.schema_name}")
-        self.stdout.write(f"  Hostname:            {result.domain.domain}")
+        self.stdout.write(
+            f"  Signs in at:         {result.tenant.url}"
+            + ("" if result.domain else "   (shared address; selected by email)")
+        )
         self.stdout.write(f"  First admin:         {result.admin_email}")
         self.stdout.write(f"  Requirements seeded: {result.seeded_requirements}")
         self.stdout.write(f"  Key fingerprint:     {result.dek_fingerprint}")

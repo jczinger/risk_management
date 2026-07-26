@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import threading
 from dataclasses import dataclass
+
+logger = logging.getLogger("vms.audit")
 
 _state = threading.local()
 
@@ -96,10 +99,31 @@ def record(
 
     ``AuditEvent`` is imported lazily: this module is imported *by* ``core.models``, so
     a module-level import would be circular.
+
+    **Outside a church, this is a no-op.** ``apps.core`` is a tenant app, so there is no
+    ``core_auditevent`` table in the public schema and the insert would raise
+    ``UndefinedTable``. That is reachable from ordinary use — a mistyped password on the
+    shared sign-in page is handled in the public schema — so it has to degrade rather
+    than 500. The event goes to the log instead. Console actions that genuinely belong
+    to a church (a key export, a document-mode change) already switch into that
+    church's schema first, so they are recorded properly.
     """
+    from django.db import connection  # noqa: PLC0415
+    from django_tenants.utils import get_public_schema_name  # noqa: PLC0415
+
     from .models import AuditEvent  # noqa: PLC0415
 
     who = actor or get_actor()
+
+    if connection.schema_name == get_public_schema_name():
+        logger.info(
+            "Audit outside a tenant schema, logged only: action=%s entity=%s summary=%s",
+            action,
+            entity_type,
+            summary,
+        )
+        return None
+
     return AuditEvent.objects.create(
         actor_user_id=who.user_id,
         actor_display=(who.display or "system")[:150],

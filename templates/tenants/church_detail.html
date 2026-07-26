@@ -5,7 +5,7 @@
 <div class="page-head">
   <div>
     <h1>{{ church.name }}</h1>
-    <p class="lede">Schema <code>{{ church.schema_name }}</code>{% if church.url %} · <a href="{{ church.url }}">{{ church.primary_domain.domain }}</a>{% endif %}</p>
+    <p class="lede">Schema <code>{{ church.schema_name }}</code> · <a href="{{ church.url }}">{{ church.hostname }}</a></p>
   </div>
   <div class="actions">
     <a class="btn" href="{% url 'tenants:church_settings' church.pk %}">Settings</a>
@@ -35,11 +35,14 @@
       <dt>Contact</dt>
       <dd>{% if church.contact_name or church.contact_email %}{{ church.contact_name }}{% if church.contact_email %} &lt;{{ church.contact_email }}&gt;{% endif %}{% else %}<span class="faint">Not recorded</span>{% endif %}</dd>
       <dt>Added</dt><dd>{{ church.created_on|date:"j F Y" }}</dd>
-      <dt>Hostnames</dt>
+      <dt>Signs in at</dt>
       <dd>
         {% for domain in church.domains.all %}
           <div class="mono small">{{ domain.domain }}{% if domain.is_primary %} <span class="badge badge--info">primary</span>{% endif %}</div>
-        {% empty %}<span class="faint">None — this church is unreachable</span>{% endfor %}
+        {% empty %}
+          <div class="mono small">{{ church.hostname }}</div>
+          <div class="faint small">Shared address — their email selects this church.</div>
+        {% endfor %}
       </dd>
     </dl>
     {% if church.notes %}
@@ -91,7 +94,7 @@
     This console deliberately does not browse a church's volunteers. Their records live
     in the <code>{{ church.schema_name }}</code> schema, encrypted with that church's own
     key, and are worked on by their own screening administrators
-    {% if church.url %}at <a href="{{ church.url }}">{{ church.primary_domain.domain }}</a>{% endif %}.
+    at <a href="{{ church.url }}">{{ church.hostname }}</a>.
   </p>
 </div>
 {% endblock %}

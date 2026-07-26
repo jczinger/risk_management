@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
@@ -200,12 +201,29 @@ class Tenant(TenantMixin):
 
     @property
     def primary_domain(self):
+        """This church's own hostname, if it was given one. Usually None."""
         return self.domains.filter(is_primary=True).first() or self.domains.first()
 
     @property
-    def url(self) -> str:
+    def hostname(self) -> str:
+        """
+        Where this church's admins sign in.
+
+        A Domain row only exists for a church that was deliberately given its own
+        hostname. Most churches have none and are reached through the shared platform
+        address, where the schema comes from the address typed at sign-in rather than
+        from DNS — see :mod:`apps.tenants.routing`.
+        """
         domain = self.primary_domain
-        return f"https://{domain.domain}/" if domain else ""
+        return domain.domain if domain else settings.VMS_BASE_DOMAIN
+
+    @property
+    def has_own_hostname(self) -> bool:
+        return self.primary_domain is not None
+
+    @property
+    def url(self) -> str:
+        return f"https://{self.hostname}/"
 
 
 class Domain(DomainMixin):

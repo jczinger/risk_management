@@ -74,8 +74,10 @@ docker compose exec web python manage.py bootstrap_superadmin \
     --email you@example.ca --first-name Your --last-name Name --password '…'
 ```
 
-Point Nginx Proxy Manager at `127.0.0.1:8020` for the base domain and a wildcard for tenant
-subdomains, then sign in at `https://<your base domain>/` and onboard the first church.
+Point Nginx Proxy Manager at `127.0.0.1:8020` for the base domain, then sign in at
+`https://<your base domain>/` and onboard the first church. One hostname serves the operator's
+console and every church — which church you land in is decided by the email address you sign in
+with, so onboarding needs no DNS or certificate work.
 
 Full walkthrough, including the DNS and proxy configuration: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
@@ -127,8 +129,8 @@ work in development without TLS.
 .venv/bin/python -m pytest apps/requirements  # one area
 ```
 
-353 tests, including the `pg_dump` leak check, tenant isolation, the age rules, and a render
-sweep over every page.
+425 tests, including the `pg_dump` leak check, tenant isolation, shared-hostname routing, the
+age rules, and a render sweep over every page.
 
 ---
 
