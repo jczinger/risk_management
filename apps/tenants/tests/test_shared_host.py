@@ -347,6 +347,59 @@ class LookupTests(SharedHostTestCase):
         self.assertEqual(target.schema_name, "beta")
 
 
+class PreSignInDisclosureTests(SharedHostTestCase):
+    """
+    A signed-out visitor must not be told which church this browser belongs to.
+
+    The tenant cookie outlives the session, so someone returning to the sign-in page —
+    or picking up a shared machine — still resolves to a church. The schema stays bound
+    (the second-factor step needs it), but nothing on the page may name the church.
+    """
+
+    def pinned_to_alpha(self) -> Client:
+        """Anonymous, but carrying a valid cookie for Alpha Church."""
+        client = self.anon()
+        client.cookies[TENANT_COOKIE_NAME] = sign_schema_name("alpha")
+        return client
+
+    def test_the_sign_in_page_does_not_name_the_church(self):
+        response = self.pinned_to_alpha().get(LOGIN_URL)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Alpha Church")
+
+    def test_the_browser_tab_title_does_not_name_the_church(self):
+        """The <title> is the easy one to miss — it is not visible in the page body."""
+        html = self.pinned_to_alpha().get(LOGIN_URL).content.decode()
+        title = html.split("<title>", 1)[1].split("</title>", 1)[0]
+
+        self.assertNotIn("Alpha", title)
+
+    def test_the_second_factor_pages_do_not_name_the_church(self):
+        client = self.pinned_to_alpha()
+        client.post(LOGIN_URL, {"email": "admin@alpha.ca", "password": PASSWORD})
+
+        # Password accepted, TOTP enrolment pending — still not signed in.
+        response = client.get("/accounts/totp/required/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Alpha Church")
+
+    def test_the_church_appears_once_signed_in(self):
+        """The other half of the rule: suppressed before sign-in, shown after."""
+        response = self.signed_in_at(self.alpha).get("/")
+
+        self.assertContains(response, "Alpha Church")
+
+    def test_signing_out_stops_showing_the_church_again(self):
+        client = self.signed_in_at(self.alpha)
+        self.assertContains(client.get("/"), "Alpha Church")
+
+        client.post("/accounts/logout/")
+
+        self.assertNotContains(client.get(LOGIN_URL), "Alpha Church")
+
+
 class AuditOutsideATenantTests(SharedHostTestCase):
     """
     The audit trail is a tenant table, and sign-in happens before a tenant is known.
