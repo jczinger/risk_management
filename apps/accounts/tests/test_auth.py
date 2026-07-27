@@ -19,6 +19,7 @@ import datetime
 import json
 from unittest import mock
 
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.core.exceptions import ValidationError
 from django.test import override_settings
@@ -106,6 +107,66 @@ class PasswordAndTOTPTests(TenantTestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertEqual(int(client.session["_auth_user_id"]), self.admin.pk)
+
+    def test_signing_in_returns_you_to_the_page_you_were_sent_from(self):
+        """
+        The ``?next=`` path, which is how anyone reaching a page while signed out
+        arrives at the login form.
+
+        Every other test here posts to a bare login URL, so ``next`` was empty and the
+        redirect helper short-circuited before it validated anything. That hid a
+        ``TypeError`` — ``url_has_allowed_host_and_scheme`` takes ``require_https``, not
+        the ``require_secure`` of the long-removed ``is_safe_url()`` — and the result was
+        a 500 for anyone who did not navigate to the login page directly.
+        """
+        import pyotp
+
+        secret = totp_service.generate_secret()
+        totp_service.confirm_enrolment(self.admin, secret, pyotp.TOTP(secret).now())
+
+        client = self._client()
+        target = reverse("org:volunteer_list")
+
+        response = client.post(
+            f"{reverse('accounts:login')}?next={target}",
+            {"email": "admin@church.ca", "password": PASSWORD},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(f"next={target}", response["Location"])
+
+        response = client.post(
+            f"{reverse('accounts:totp_verify')}?next={target}",
+            {"code": pyotp.TOTP(secret).now()},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], target)
+        self.assertEqual(int(client.session["_auth_user_id"]), self.admin.pk)
+
+    def test_next_cannot_be_used_as_an_open_redirect(self):
+        """An off-site ``next`` is discarded, not followed."""
+        import pyotp
+
+        secret = totp_service.generate_secret()
+        totp_service.confirm_enrolment(self.admin, secret, pyotp.TOTP(secret).now())
+
+        for hostile in (
+            "https://evil.example.com/",
+            "//evil.example.com/",
+            "http://evil.example.com/steal",
+        ):
+            with self.subTest(next=hostile):
+                client = self._client()
+                client.post(
+                    reverse("accounts:login"),
+                    {"email": "admin@church.ca", "password": PASSWORD, "next": hostile},
+                )
+                response = client.post(
+                    reverse("accounts:totp_verify"),
+                    {"code": pyotp.TOTP(secret).now(), "next": hostile},
+                )
+
+                self.assertEqual(response.status_code, 302)
+                self.assertEqual(response["Location"], settings.LOGIN_REDIRECT_URL)
 
     def test_a_wrong_totp_code_does_not_sign_you_in(self):
         import pyotp

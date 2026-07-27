@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime
 
+from django.core.cache import cache
 from django.db import connection
 from django.utils import timezone
 from django_tenants.test.cases import FastTenantTestCase
@@ -55,6 +56,16 @@ class TenantTestCase(FastTenantTestCase):
         super().setUp()
         # The key cache is process-global; a stale entry would leak across test classes.
         forget_cached_keys()
+
+        # So is the rate-limit cache. LocMemCache lives for the whole process, and
+        # django-ratelimit counts sign-in attempts per email and per IP — which in tests
+        # means one address and one IP for the entire run. Without this, every login a
+        # test performs is charged against the next test's budget, and somewhere past
+        # LOGIN_RATELIMIT (10/5m) an unrelated test starts getting "too many attempts"
+        # instead of a sign-in. That is order-dependent and looks like a real failure in
+        # whichever test happens to be over the line. The two tests that assert on rate
+        # limiting build their own counts from this clean slate.
+        cache.clear()
 
         # FastTenantTestCase holds ONE Tenant instance as a class attribute for the whole
         # run. A test that changes a church setting — reminder lead times, notifications on

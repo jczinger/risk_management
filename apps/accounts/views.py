@@ -60,12 +60,17 @@ def _post_login_redirect(request) -> str:
 
     ``next`` is honored only when it is a local path, so the login page cannot be used
     as an open redirect.
+
+    The keyword is ``require_https``. ``require_secure`` was its name on the old
+    ``is_safe_url()``, removed in Django 3.0, and passing it raises ``TypeError`` —
+    which only happens when a ``next`` value is actually present, so it hid until
+    someone was redirected to the login page rather than going there directly.
     """
     from django.utils.http import url_has_allowed_host_and_scheme
 
     candidate = request.POST.get("next") or request.GET.get("next") or ""
     if candidate and url_has_allowed_host_and_scheme(
-        candidate, allowed_hosts={request.get_host()}, require_secure=request.is_secure()
+        candidate, allowed_hosts={request.get_host()}, require_https=request.is_secure()
     ):
         return candidate
     return settings.LOGIN_REDIRECT_URL
