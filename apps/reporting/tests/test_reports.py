@@ -444,7 +444,15 @@ class AuditViewerTests(ReportingBase):
         response = self.client.get(reverse("reporting:audit_trail"), {"since": "not-a-date"})
         self.assertEqual(response.status_code, 200)
 
-    def test_the_detail_page_shows_the_decrypted_diff(self):
+    def test_the_detail_page_does_not_render_the_stored_diff(self):
+        """
+        The entry page shows who/what/when only.
+
+        The before/after diff is still written and retained — the trail stays
+        append-only — but it is not part of this page, and the view does not decrypt it.
+        Whatever a reader actually needs lives on the record itself: a waiver's reason on
+        the requirement, an override's reasoning on the criminal record check.
+        """
         from apps.core.models import AuditEvent
 
         self.volunteer.address = "New address"
@@ -470,7 +478,16 @@ class AuditViewerTests(ReportingBase):
 
         response = self.client.get(reverse("reporting:audit_event_detail", args=[event.pk]))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Detail")
+
+        # The header facts are still there...
+        self.assertContains(response, event.entity_type)
+        # ...and the diff is neither rendered nor handed to the template.
+        self.assertNotIn("detail", response.context)
+        self.assertNotContains(response, "New address")
+        self.assertNotContains(response, "before:")
+
+        # Still recorded, just not displayed.
+        self.assertTrue(event.detail)
 
     def test_the_viewer_offers_no_way_to_edit_or_delete(self):
         from django.urls import NoReverseMatch

@@ -230,13 +230,15 @@ def audit_trail(request):
 
 @login_required
 def audit_event_detail(request, pk: int):
-    """One audit entry, with its decrypted before/after detail."""
+    """
+    One audit entry.
+
+    The stored before/after detail is not decrypted or passed to the template — the page
+    does not render it. Decrypting it here anyway would put personal information into a
+    response for no reason, so the read simply does not happen.
+    """
     event = get_object_or_404(AuditEvent, pk=pk)
-    return render(
-        request,
-        "reporting/audit_event_detail.html",
-        {"event": event, "detail": event.detail_data},
-    )
+    return render(request, "reporting/audit_event_detail.html", {"event": event})
 
 
 # ---------------------------------------------------------------------------

@@ -23,32 +23,14 @@
   </dl>
 </div>
 
-{% if detail %}
-  <div class="card">
-    <h2>Detail</h2>
-    <p class="small faint">
-      Encrypted at rest — a before/after diff can contain personal information, so it is
-      stored the same way the record itself is.
-    </p>
-    <table class="data">
-      <tbody>
-        {% for key, value in detail.items %}
-          <tr>
-            <th style="width:14rem">{{ key }}</th>
-            <td class="small">
-              {% if value.before or value.after %}
-                <div><span class="faint">before:</span> {{ value.before|default:"—" }}</div>
-                <div><span class="faint">after:</span> <strong>{{ value.after|default:"—" }}</strong></div>
-              {% else %}
-                {{ value }}
-              {% endif %}
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-{% endif %}
+{% comment %}
+The before/after detail is deliberately not rendered here.
+
+It is still recorded and retained — `AuditEvent.detail` is written on every entry and the
+trail remains append-only — it is simply not part of this page. The substantive content a
+reader needs is already on the record itself: a waiver's reason shows on the requirement,
+an override's reasoning on the criminal record check.
+{% endcomment %}
 
 <p class="small muted">
   Audit entries cannot be changed or removed by anyone using this system, including the
