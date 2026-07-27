@@ -18,6 +18,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.db import connection, transaction
+from django.utils import timezone
 
 from apps.core import audit
 from apps.core.crypto import decrypt_bytes, encrypt_bytes
@@ -86,6 +87,61 @@ def validate_upload(upload) -> tuple[bytes, str]:
 
 
 @transaction.atomic
+def complete_backing_requirement(document, instance) -> bool:
+    """
+    Recording the paperwork *is* completing the requirement.
+
+    For anything that needs a document, the document is the evidence — asking an admin
+    to record it and then separately tick "complete" invites the two to disagree, and a
+    requirement showing complete with nothing behind it is exactly what an audit is
+    looking for. So completion follows from the document, in every mode: an uploaded
+    file, a link to the church's own store, or a note of where the hard copy lives.
+
+    Skipped in four cases, each for a reason:
+
+    * **The criminal record check.** It has its own flow. Clearance, disqualification and
+      the three-year clock all hang off ``record_crc``, and completing it from a file
+      upload would sidestep all three.
+    * **Waived** and **not applicable.** Both are deliberate decisions by an admin.
+      Quietly overturning one because a file arrived would lose that decision.
+    * **Blocked.** Pending a criminal record check outcome; ``mark_requirement_complete``
+      refuses it outright.
+
+    Returns whether the requirement was completed, so the caller can say so.
+
+    A failure here must not lose the document. The document is the primary act and is
+    already saved; if completion is refused — a document dated in the future, say — the
+    requirement is simply left as it was and the problem logged.
+    """
+    if instance is None:
+        return False
+
+    from apps.requirements.models import RequirementStatus
+    from apps.requirements.services import mark_requirement_complete
+
+    if instance.definition.is_crc:
+        return False
+    if instance.status in (
+        RequirementStatus.WAIVED,
+        RequirementStatus.NOT_APPLICABLE,
+        RequirementStatus.BLOCKED,
+    ):
+        return False
+
+    completed_on = document.document_date or timezone.localdate()
+    try:
+        mark_requirement_complete(instance, completed_on)
+    except ValidationError as exc:
+        logger.warning(
+            "Document %s recorded but '%s' was not completed: %s",
+            document.pk,
+            instance.definition.name,
+            "; ".join(exc.messages),
+        )
+        return False
+    return True
+
+
 def store_document(
     *,
     volunteer,
@@ -153,6 +209,8 @@ def store_document(
 
     if supersedes is not None:
         supersedes.supersede_with(document)
+
+    complete_backing_requirement(document, requirement_instance)
 
     audit.record(
         AuditAction.UPLOAD,

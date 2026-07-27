@@ -583,3 +583,142 @@ class OnboardingWindowTests(TenantTestCase):
         mark_requirement_complete(approval, timezone.localdate())
 
         self.assertFalse(onboarding_window_breached(self.volunteer))
+
+
+class RequirementRowActionTests(TenantTestCase):
+    """
+    The buttons on a requirement row, driven through HTTP.
+
+    Two rules are being enforced here. Anything backed by a document is completed by
+    recording that document, so it offers no "Mark complete" — otherwise the tick and
+    the evidence can disagree. Anything *not* backed by a document keeps the button, or
+    it could only ever be waived.
+    """
+
+    def setUp(self):
+        super().setUp()
+        seed_default_template()
+        self.volunteer = self.make_volunteer(age=40)
+        self.assign(self.volunteer, self.make_role())
+        sync_volunteer_requirements(self.volunteer)
+        self.client = self.signed_in_client()
+
+    def instance_for(self, name: str):
+        return self.volunteer.requirement_instances.get(definition__name=name)
+
+    def volunteer_page(self) -> str:
+        from django.urls import reverse
+
+        response = self.client.get(reverse("org:volunteer_detail", args=[self.volunteer.pk]))
+        self.assertEqual(response.status_code, 200)
+        return response.content.decode()
+
+    def row_for(self, instance) -> str:
+        """Just the markup for one requirement's row."""
+        html = self.volunteer_page()
+        marker = f'id="req-{instance.pk}"'
+        self.assertIn(marker, html)
+        start = html.index(marker)
+        return html[start : start + 1600]
+
+    def test_a_document_backed_requirement_offers_no_mark_complete(self):
+        row = self.row_for(self.instance_for("Confidentiality Agreement"))
+
+        self.assertNotIn("Mark complete", row)
+        self.assertIn("Add document", row)
+
+    def test_a_requirement_needing_no_document_keeps_mark_complete(self):
+        """
+        The Interview has no document to record.
+
+        Without the button it could only ever be waived, which is why the rule is "no
+        tick where there is a document" rather than "no tick anywhere".
+        """
+        interview = self.instance_for("Interview")
+        self.assertFalse(interview.definition.requires_document)
+
+        row = self.row_for(interview)
+        self.assertIn("Mark complete", row)
+
+    def test_every_seeded_requirement_can_be_satisfied_somehow(self):
+        """
+        The guard on the rule above: no requirement may become a dead end.
+
+        Each one needs either a document route or a completion button, or an admin has
+        no way to satisfy it short of a waiver.
+        """
+        for instance in self.volunteer.requirement_instances.select_related("definition"):
+            with self.subTest(requirement=instance.definition.name):
+                self.assertTrue(
+                    instance.definition.requires_document
+                    or instance.definition.is_crc
+                    or "Mark complete" in self.row_for(instance),
+                )
+
+    def test_the_button_is_labelled_as_a_status_change(self):
+        row = self.row_for(self.instance_for("Interview"))
+
+        self.assertIn("Mark as in progress", row)
+        self.assertNotIn(">Start<", row)
+
+
+class MarkInProgressTests(TenantTestCase):
+    """The htmx status change, which must not navigate anywhere."""
+
+    def setUp(self):
+        super().setUp()
+        seed_default_template()
+        self.volunteer = self.make_volunteer(age=40)
+        self.assign(self.volunteer, self.make_role())
+        sync_volunteer_requirements(self.volunteer)
+        self.client = self.signed_in_client()
+        self.instance = self.volunteer.requirement_instances.get(
+            definition__name="Interview"
+        )
+
+    def url(self):
+        from django.urls import reverse
+
+        return reverse("requirements:instance_start", args=[self.instance.pk])
+
+    def test_an_htmx_click_swaps_the_row_and_does_not_redirect(self):
+        response = self.client.post(self.url(), HTTP_HX_REQUEST="true")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.content.decode()
+        # The row itself came back, not a whole page.
+        self.assertIn(f'id="req-{self.instance.pk}"', html)
+        self.assertNotIn("<!doctype html>", html.lower())
+        self.assertIn("In progress", html)
+
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.IN_PROGRESS)
+
+    def test_the_swapped_row_no_longer_offers_the_button(self):
+        html = self.client.post(self.url(), HTTP_HX_REQUEST="true").content.decode()
+
+        self.assertNotIn("Mark as in progress", html)
+
+    def test_it_still_works_without_htmx(self):
+        """The button must degrade to an ordinary POST and redirect."""
+        response = self.client.post(self.url())
+
+        self.assertEqual(response.status_code, 302)
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.IN_PROGRESS)
+
+    def test_it_records_the_change_in_the_audit_trail(self):
+        from apps.core.models import AuditEvent
+
+        self.client.post(self.url(), HTTP_HX_REQUEST="true")
+
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                entity_type="RequirementInstance",
+                entity_id=str(self.instance.pk),
+                summary="Marked in progress",
+            ).exists()
+        )
+
+    def test_a_get_is_refused(self):
+        self.assertEqual(self.client.get(self.url()).status_code, 405)

@@ -356,3 +356,166 @@ class ModeChangeTests(TenantTestCase):
         path = Path(stored.encrypted_file.path)
         if path.exists():
             path.unlink()
+
+
+class DocumentCompletesTheRequirementTests(TenantTestCase):
+    """
+    Recording the paperwork is what completes the requirement.
+
+    Asking an admin to record a document and *then* tick "complete" lets the two
+    disagree, and a requirement showing complete with nothing behind it is exactly what
+    an audit is looking for. So the tick is gone from the interface and completion
+    follows from the document — in every mode, since "recording a document" means a
+    file, a link, or a note of where the hard copy lives.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tenant.document_mode = DocumentMode.TRACK
+        self.tenant.save(update_fields=["document_mode"])
+        connection.set_tenant(self.tenant)
+
+        self.seed()
+        self.volunteer = self.make_volunteer(age=40)
+        self.assign(self.volunteer, self.make_role())
+
+        from apps.requirements.services import sync_volunteer_requirements
+
+        sync_volunteer_requirements(self.volunteer)
+
+    def instance_for(self, name: str):
+        return self.volunteer.requirement_instances.get(definition__name=name)
+
+    def record_for(self, instance, **extra):
+        defaults = {
+            "volunteer": self.volunteer,
+            "title": instance.definition.name,
+            "kind": DocumentKind.AGREEMENT,
+            "physical_location": "Locked cabinet, office",
+            "requirement_instance": instance,
+        }
+        defaults.update(extra)
+        return store_document(**defaults)
+
+    def test_recording_a_document_completes_the_requirement(self):
+        from apps.requirements.models import RequirementStatus
+
+        instance = self.instance_for("Confidentiality Agreement")
+        self.assertEqual(instance.status, RequirementStatus.NOT_STARTED)
+
+        self.record_for(instance)
+
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, RequirementStatus.COMPLETE)
+        self.assertIsNotNone(instance.completed_on)
+
+    def test_the_document_date_is_the_completion_date(self):
+        import datetime
+
+        from django.utils import timezone
+
+        instance = self.instance_for("Confidentiality Agreement")
+        signed_on = timezone.localdate() - datetime.timedelta(days=30)
+
+        self.record_for(instance, document_date=signed_on)
+
+        instance.refresh_from_db()
+        self.assertEqual(instance.completed_on, signed_on)
+
+    def test_a_recurring_requirement_gets_a_fresh_expiry(self):
+        """Re-recording is how an annual agreement is renewed."""
+        instance = self.instance_for("Code of Conduct")
+
+        self.record_for(instance)
+
+        instance.refresh_from_db()
+        self.assertIsNotNone(instance.expires_on)
+        self.assertGreater(instance.expires_on, instance.completed_on)
+
+    def test_it_works_in_store_mode_too(self):
+        from apps.requirements.models import RequirementStatus
+
+        self.tenant.document_mode = DocumentMode.STORE
+        self.tenant.save(update_fields=["document_mode"])
+        connection.set_tenant(self.tenant)
+
+        instance = self.instance_for("Confidentiality Agreement")
+        stored = self.record_for(instance, physical_location="", upload=pdf_upload())
+
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, RequirementStatus.COMPLETE)
+
+        path = Path(stored.encrypted_file.path)
+        if path.exists():
+            path.unlink()
+
+    def test_a_document_with_no_requirement_completes_nothing(self):
+        from apps.requirements.models import RequirementStatus
+
+        store_document(
+            volunteer=self.volunteer,
+            title="Loose paperwork",
+            kind=DocumentKind.OTHER,
+            physical_location="Cabinet",
+        )
+
+        statuses = set(
+            self.volunteer.requirement_instances.values_list("status", flat=True)
+        )
+        self.assertNotIn(RequirementStatus.COMPLETE, statuses)
+
+    def test_the_criminal_record_check_is_left_alone(self):
+        """
+        Its own flow owns it.
+
+        Clearance, disqualification and the three-year clock all hang off record_crc;
+        completing it because a file arrived would sidestep every one of them.
+        """
+        from apps.requirements.models import RequirementStatus
+
+        instance = self.instance_for("Criminal Record Check + Vulnerable Sector Search")
+        self.record_for(instance, kind=DocumentKind.CRC)
+
+        instance.refresh_from_db()
+        self.assertNotEqual(instance.status, RequirementStatus.COMPLETE)
+
+    def test_a_waived_requirement_is_not_quietly_un_waived(self):
+        from apps.requirements.models import RequirementStatus
+        from apps.requirements.services import waive_requirement
+
+        instance = self.instance_for("Confidentiality Agreement")
+        waive_requirement(instance, reason="Signed at the district office", waived_by="Pat")
+
+        self.record_for(instance)
+
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, RequirementStatus.WAIVED)
+
+    def test_a_blocked_requirement_is_not_completed(self):
+        from apps.requirements.models import RequirementStatus
+
+        instance = self.instance_for("Confidentiality Agreement")
+        instance.status = RequirementStatus.BLOCKED
+        instance.save(update_fields=["status"])
+
+        self.record_for(instance)
+
+        instance.refresh_from_db()
+        self.assertEqual(instance.status, RequirementStatus.BLOCKED)
+
+    def test_a_document_dated_in_the_future_is_kept_but_completes_nothing(self):
+        """The document is the primary act; a refused completion must not lose it."""
+        import datetime
+
+        from django.utils import timezone
+
+        from apps.requirements.models import RequirementStatus
+
+        instance = self.instance_for("Confidentiality Agreement")
+        document = self.record_for(
+            instance, document_date=timezone.localdate() + datetime.timedelta(days=5)
+        )
+
+        self.assertIsNotNone(document.pk)
+        instance.refresh_from_db()
+        self.assertNotEqual(instance.status, RequirementStatus.COMPLETE)

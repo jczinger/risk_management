@@ -18,7 +18,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from apps.org.models import Volunteer
-from apps.requirements.models import CRCRecord, RequirementInstance
+from apps.requirements.models import CRCRecord, RequirementInstance, RequirementStatus
 from apps.tenants.models import DocumentMode
 
 from .forms import DocumentForm
@@ -107,9 +107,24 @@ def document_create(request, volunteer_pk: int):
                 for error in exc.messages:
                     form.add_error(None, error)
         else:
-            messages.success(request, f"'{document.title}' recorded.")
             if instance:
+                # store_document completes the requirement the document backs; say so,
+                # rather than leaving the admin to go and check.
+                instance.refresh_from_db()
+                if instance.status == RequirementStatus.COMPLETE:
+                    note = ""
+                    if instance.expires_on:
+                        note = f" Next due {instance.expires_on:%d %b %Y}."
+                    messages.success(
+                        request,
+                        f"'{document.title}' recorded, and "
+                        f"'{instance.definition.name}' is now complete.{note}",
+                    )
+                else:
+                    messages.success(request, f"'{document.title}' recorded.")
                 return redirect("requirements:instance_detail", pk=instance.pk)
+
+            messages.success(request, f"'{document.title}' recorded.")
             if crc_record:
                 return redirect("requirements:crc_detail", pk=crc_record.pk)
             return redirect("org:volunteer_detail", pk=volunteer.pk)

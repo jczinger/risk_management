@@ -13,70 +13,7 @@ Expects: title, instances, volunteer.
   </div>
 
   {% for instance in instances %}
-    <div class="req req--{{ instance.bucket }}">
-      <div class="req-main">
-        <div class="req-name">
-          <a href="{% url 'requirements:instance_detail' instance.pk %}">{{ instance.definition.name }}</a>
-          {% if instance.definition.appendix_reference %}
-            <span class="small faint">({{ instance.definition.appendix_reference }})</span>
-          {% endif %}
-        </div>
-        <div class="req-meta">
-          {{ instance.definition.cadence_display }}
-          {% if instance.completed_on %} · completed {{ instance.completed_on|date:"j M Y" }}{% endif %}
-          {% if instance.expires_on %} · next due {{ instance.expires_on|date:"j M Y" }}{% endif %}
-          {% if instance.due_on %} · <strong>deadline {{ instance.due_on|date:"j M Y" }}</strong>{% endif %}
-          {% if instance.not_applicable_reason %} · {{ instance.not_applicable_reason }}{% endif %}
-          {% if instance.status == "waived" %} · waived by {{ instance.waived_by }} on {{ instance.waived_on|date:"j M Y" }}{% endif %}
-        </div>
-        {% if instance.due_reason %}
-          <div class="req-meta"><em>{{ instance.due_reason }}</em></div>
-        {% endif %}
-      </div>
-
-      <div class="req-status">
-        {% if instance.bucket == "overdue" %}
-          <span class="badge badge--danger">
-            {% if instance.status == "blocked" %}Blocked{% else %}Overdue{% endif %}
-          </span>
-        {% elif instance.bucket == "due_soon" %}
-          <span class="badge badge--warn">Due in {{ instance.days_until_expiry }} day{{ instance.days_until_expiry|pluralize }}</span>
-        {% elif instance.status == "complete" %}
-          <span class="badge badge--ok">Complete</span>
-        {% elif instance.status == "not_applicable" %}
-          <span class="badge badge--muted">Not applicable</span>
-        {% elif instance.status == "waived" %}
-          <span class="badge badge--info">Waived</span>
-        {% elif instance.status == "in_progress" %}
-          <span class="badge badge--warn">In progress</span>
-        {% else %}
-          <span class="badge badge--muted">Not started</span>
-        {% endif %}
-
-        {% if not print_view %}
-          {% if instance.definition.is_crc %}
-            {% if volunteer.is_active and not volunteer.is_permanently_disqualified and instance.status != "not_applicable" %}
-              <a class="btn btn--sm btn--primary" href="{% url 'requirements:crc_create' volunteer.pk %}">Record check</a>
-            {% endif %}
-          {% elif instance.status != "not_applicable" and instance.status != "blocked" %}
-            <a class="btn btn--sm btn--primary" href="{% url 'requirements:instance_complete' instance.pk %}">
-              {% if instance.status == "complete" %}Renew{% else %}Mark complete{% endif %}
-            </a>
-            {% if instance.status == "not_started" %}
-              <form method="post" action="{% url 'requirements:instance_start' instance.pk %}">
-                {% csrf_token %}<button type="submit" class="btn btn--sm">Start</button>
-              </form>
-            {% endif %}
-            {% if instance.status != "waived" %}
-              <a class="btn btn--sm" href="{% url 'requirements:instance_waive' instance.pk %}">Waive</a>
-            {% endif %}
-          {% endif %}
-          {% if instance.definition.requires_document %}
-            <a class="btn btn--sm" href="{% url 'documents:create' volunteer.pk %}?instance={{ instance.pk }}">Document</a>
-          {% endif %}
-        {% endif %}
-      </div>
-    </div>
+    {% include "requirements/_instance_row.html" %}
   {% empty %}
     <div class="empty">
       <strong>Nothing here yet</strong>

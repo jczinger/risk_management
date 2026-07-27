@@ -287,10 +287,27 @@ def _unmet_dependency(instance: RequirementInstance) -> RequirementInstance | No
 @login_required
 @require_POST
 def instance_start(request, pk: int):
+    """
+    Move a requirement to in progress.
+
+    Over htmx this swaps the single row back in place — the admin is working down a list
+    of eight, and bouncing them to the top of the volunteer's file after each click made
+    the button read as navigation rather than as a status change. A plain POST still
+    redirects, so the button works with JavaScript unavailable.
+    """
     instance = get_object_or_404(
         RequirementInstance.objects.select_related("volunteer", "definition"), pk=pk
     )
     start_requirement(instance)
+
+    if request.headers.get("HX-Request"):
+        instance.refresh_from_db()
+        return render(
+            request,
+            "requirements/_instance_row.html",
+            {"instance": instance, "volunteer": instance.volunteer},
+        )
+
     messages.success(request, f"'{instance.definition.name}' marked as in progress.")
     return redirect("org:volunteer_detail", pk=instance.volunteer.pk)
 
