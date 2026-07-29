@@ -33,6 +33,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods, require_POST
 from django_ratelimit.decorators import ratelimit
 from django_ratelimit.exceptions import Ratelimited
@@ -115,6 +116,7 @@ def _complete_login(request, user: User, method: str) -> HttpResponse:
 
 
 @never_cache
+@ensure_csrf_cookie
 @require_http_methods(["GET"])
 def login_view(request):
     """
@@ -122,6 +124,14 @@ def login_view(request):
 
     There is nothing to POST here. The passkey ceremony runs against the WebAuthn
     endpoints over fetch, and everything else happens at ``recover_request``.
+
+    ``ensure_csrf_cookie`` is load-bearing and easy to lose. Django only sets the
+    ``csrftoken`` cookie when something asks it to — historically ``{% csrf_token %}``
+    inside this page's password form. Removing that form removed the cookie, and
+    ``static/js/passkeys.js`` reads it to build the ``X-CSRFToken`` header, so every
+    passkey sign-in was rejected with a 403 the browser could only report as "the server
+    rejected that request". A page whose only interaction is a fetch still needs the
+    cookie. Guarded by ``CsrfCookieOnSignInTests``.
     """
     if request.user.is_authenticated:
         return redirect(settings.LOGIN_REDIRECT_URL)
@@ -454,12 +464,18 @@ def _send_recovery_links(email: str) -> None:
 
 @login_required
 @never_cache
+@ensure_csrf_cookie
 def passkey_required(request):
     """
     The enrolment wall. Everything else redirects here until a passkey exists.
 
     Reached only through :class:`~apps.accounts.middleware.ForcePasskeyMiddleware`, or
     directly by someone who already has one — hence the redirect out.
+
+    ``ensure_csrf_cookie`` for the same reason as :func:`login_view`: the registration
+    ceremony is a fetch, and it needs the cookie. The sign-out form on this page happens
+    to set it too, but depending on an unrelated form for that is precisely the
+    fragility that broke sign-in once already.
     """
     if request.user.has_passkey:
         return redirect(settings.LOGIN_REDIRECT_URL)

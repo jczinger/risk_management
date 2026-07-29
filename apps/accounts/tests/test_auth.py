@@ -450,6 +450,74 @@ class AdminManagementTests(TenantTestCase):
         self.assertTrue(User.objects.filter(pk=second.pk).exists())
 
 
+class CsrfCookieOnSignInTests(TenantTestCase):
+    """
+    Every page whose only interaction is a fetch must still set the CSRF cookie.
+
+    This is a regression test for a real outage. Django sets ``csrftoken`` only when
+    something asks it to, and on the sign-in page that something used to be
+    ``{% csrf_token %}`` inside the password form. Deleting the form deleted the cookie;
+    ``static/js/passkeys.js`` reads it to build the ``X-CSRFToken`` header, so every
+    passkey sign-in came back 403 and the browser could only say "the server rejected
+    that request". Nothing in the suite noticed, because the test client does not enforce
+    CSRF unless asked to.
+    """
+
+    def test_the_sign_in_page_sets_the_csrf_cookie(self):
+        from django.test import Client
+
+        response = Client(HTTP_HOST=self.TEST_DOMAIN).get(reverse("accounts:login"))
+
+        self.assertIn("csrftoken", response.cookies)
+
+    def test_a_passkey_ceremony_from_the_sign_in_page_is_not_rejected(self):
+        """
+        The defect end to end, with CSRF actually enforced: land on the sign-in page,
+        then post the ceremony exactly as the browser does — cookie plus header.
+        """
+        from django.test import Client
+
+        client = Client(HTTP_HOST=self.TEST_DOMAIN, enforce_csrf_checks=True)
+        client.get(reverse("accounts:login"))
+        token = client.cookies["csrftoken"].value
+
+        response = client.post(
+            reverse("accounts:webauthn_auth_begin"), HTTP_X_CSRFTOKEN=token
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_the_enrolment_page_sets_it_too(self):
+        """
+        Belt and braces, stated as such: this one passes with or without the decorator,
+        because the sign-out form on that page sets the cookie as a side effect. It is
+        here to stop that accident from becoming the guarantee — remove the form and the
+        registration ceremony breaks exactly as sign-in did.
+        """
+        admin = self.make_admin(email="nokey@church.ca")
+        client = self.signed_in_client(admin, with_passkey=False)
+
+        response = client.get(reverse("accounts:passkey_required"))
+
+        self.assertIn("csrftoken", response.cookies)
+
+    def test_registering_a_passkey_from_that_page_is_not_rejected(self):
+        from django.test import Client
+
+        admin = self.make_admin(email="nokey2@church.ca")
+        client = Client(HTTP_HOST=self.TEST_DOMAIN, enforce_csrf_checks=True)
+        client.force_login(admin)
+        client.get(reverse("accounts:passkey_required"))
+        token = client.cookies["csrftoken"].value
+
+        response = client.post(
+            reverse("accounts:webauthn_register_begin"), HTTP_X_CSRFTOKEN=token
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+
+
 class PasswordRemovalTests(TenantTestCase):
     """
     Nothing can sign in with a password, and the upgrade left nothing that could.
