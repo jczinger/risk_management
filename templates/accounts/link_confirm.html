@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% comment %}
+Shown on GET, before anything is spent — so a link fetched by something other than a
+person (a chat app building a preview, a mail gateway scanning it) leaves the link
+untouched for whoever it was actually sent to. Only clicking through — a POST —
+spends it and signs anyone in.
+{% endcomment %}
+
+{% block title %}Continue signing in{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+{% block nav %}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Hello{% if first_name %}, {{ first_name }}{% endif %}</h1>
+  </div>
+</div>
+
+<div class="card">
+  <p class="muted">
+    {% if is_recovery %}
+      This link signs you back in, in place of the passkey you have lost access to.
+    {% else %}
+      This link signs you in and takes you straight to registering a passkey, which is
+      how you will sign in after that.
+    {% endif %}
+  </p>
+  <form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn--primary btn--lg btn--block">Continue</button>
+  </form>
+</div>
+
+<p class="small faint">
+  Nothing happens until you press Continue — opening this page does not sign you in.
+</p>
+{% endblock %}

@@ -325,19 +325,34 @@ def passkey_remove(request, pk: int):
 
 
 @never_cache
-@require_http_methods(["GET"])
+@require_http_methods(["GET", "POST"])
 def link_consume(request, payload: str):
     """
-    Spend a sign-in link: sign the holder in once, and send them to enrol a passkey.
+    Confirm, then spend, a sign-in link.
 
-    A GET, because this is a URL in an email and there is nothing else it could be.
-    That normally deserves suspicion — a link that changes state can be spent by a
-    scanner in the recipient's own mail chain, and by any prefetcher in between. It is
-    accepted here for the same reason every other product accepts it: the alternative
-    is an interstitial page whose only content is a button, which stops nothing that
-    follows redirects. The exposure is bounded by the link being single-use and
-    short-lived, and by the sign-in it grants leading nowhere except passkey enrolment.
+    A GET used to spend it outright — the only thing a URL in an email could sensibly
+    do. In production that let a link die before its recipient ever saw it: something
+    with a browser-engine user agent (a chat app building a preview of the link before
+    it was even sent, most likely) fetched it within seconds of issue, both times it
+    happened. A GET here now only shows that the link still works; only a click —
+    a POST — spends it. That stops anything that merely *fetches* the URL, which is
+    every one of these prefetchers, none of which submit a form.
     """
+    if request.method == "GET":
+        try:
+            user, link = link_service.verify_link(request, payload)
+        except link_service.LinkError as exc:
+            _audit_failed_login(request, "invalid_link")
+            return render(request, "accounts/link_invalid.html", {"reason": str(exc)}, status=400)
+        return render(
+            request,
+            "accounts/link_confirm.html",
+            {
+                "first_name": user.get_short_name(),
+                "is_recovery": link.purpose == LinkPurpose.RECOVERY,
+            },
+        )
+
     if request.user.is_authenticated:
         auth_logout(request)
 

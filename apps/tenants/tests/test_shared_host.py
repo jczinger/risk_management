@@ -99,14 +99,14 @@ class AddressRoutingTests(SharedHostTestCase):
     """
 
     def test_a_link_pins_the_browser_to_its_own_church(self):
-        response = self.anon().get(self.link_for(self.alpha))
+        response = self.anon().post(self.link_for(self.alpha))
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.cookie_value(response), sign_schema_name("alpha"))
 
     def test_two_links_pin_to_two_different_churches(self):
-        first = self.anon().get(self.link_for(self.alpha))
-        second = self.anon().get(self.link_for(self.beta))
+        first = self.anon().post(self.link_for(self.alpha))
+        second = self.anon().post(self.link_for(self.beta))
 
         self.assertEqual(self.cookie_value(first), sign_schema_name("alpha"))
         self.assertEqual(self.cookie_value(second), sign_schema_name("beta"))
@@ -119,7 +119,7 @@ class AddressRoutingTests(SharedHostTestCase):
         with schema_context(get_public_schema_name()):
             _, url = issue_link(self.operator, LinkPurpose.RECOVERY)
 
-        response = self.anon().get(url)
+        response = self.anon().post(url)
 
         self.assertEqual(response.status_code, 302)
         # Cleared rather than set: the console *is* the no-cookie state, so a stale
@@ -135,7 +135,7 @@ class AddressRoutingTests(SharedHostTestCase):
 
         client = self.anon()
         client.cookies[TENANT_COOKIE_NAME] = sign_schema_name("alpha")
-        response = client.get(url)
+        response = client.post(url)
 
         self.assertEqual(self.cookie_value(response), "")
 
@@ -187,7 +187,7 @@ class CookieIntegrityTests(SharedHostTestCase):
     """The cookie selects a schema. It must not be able to grant one."""
 
     def test_the_cookie_is_signed_rather_than_a_bare_schema_name(self):
-        response = self.anon().get(self.link_for(self.alpha))
+        response = self.anon().post(self.link_for(self.alpha))
 
         value = self.cookie_value(response)
         self.assertNotEqual(value, "alpha")
@@ -494,7 +494,7 @@ class SubdomainStillWorksTests(SharedHostTestCase):
         Harmless, and simpler than suppressing it. The cookie is host-only, so one set
         on ``alpha.testserver`` is never sent to the shared address in the first place.
         """
-        response = Client(HTTP_HOST="alpha.testserver").get(self.link_for(self.alpha))
+        response = Client(HTTP_HOST="alpha.testserver").post(self.link_for(self.alpha))
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.cookie_value(response), sign_schema_name("alpha"))

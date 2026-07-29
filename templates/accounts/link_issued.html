@@ -36,11 +36,12 @@ and never reachable by reloading — leaving this page means minting another one
   </div>
   <div style="padding: 0 1.25rem 1.25rem">
     <p class="muted">
-      Valid for {{ expires_in }}, and it works once.
+      Valid for {{ expires_in }}, and it works once. Opening it shows a confirmation
+      page first — nothing is spent until they press Continue on it —
       {% if is_recovery %}
-        Opening it signs them in, in place of the passkey they have lost access to.
+        which then signs them in, in place of the passkey they have lost access to.
       {% else %}
-        Opening it signs them in and takes them straight to registering a passkey,
+        which then signs them in and takes them straight to registering a passkey,
         which is how they will sign in after that.
       {% endif %}
     </p>
@@ -51,9 +52,8 @@ and never reachable by reloading — leaving this page means minting another one
     <span id="copy-status" class="small muted" role="status" aria-live="polite"></span>
 
     <p class="small muted mt1 mb0">
-      This page cannot show it again. Sharing it through anything that generates a
-      link preview — chat apps, some email scanners — can spend it before they do; if
-      that happens, or it simply expires, issue a new one from the administrators page.
+      This page cannot show it again. If it is lost, or it simply expires, issue a new
+      one from the administrators page.
     </p>
   </div>
 </div>

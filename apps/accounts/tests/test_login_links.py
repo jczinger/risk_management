@@ -102,23 +102,63 @@ class LinkConsumeTests(TenantTestCase):
     def issue(self, purpose=LinkPurpose.INVITE):
         return link_service.issue_link(self.admin, purpose)
 
-    def test_a_link_signs_you_in_and_lands_on_enrolment(self):
+    def test_a_get_shows_a_confirmation_and_signs_in_nobody(self):
+        """
+        The fix for a real incident: a GET used to spend the link outright, so anything
+        that merely fetched the URL — a chat app building a preview before the message
+        was even sent — could burn it before the recipient ever saw it. A GET now only
+        confirms the link still works.
+        """
         _, url = self.issue()
 
-        response = self.client.get(url, follow=True)
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+        link = LoginLink.objects.get(user=self.admin)
+        self.assertIsNone(link.consumed_at)
+
+    def test_a_get_does_not_spend_it_for_a_later_post(self):
+        _, url = self.issue()
+        self.client.get(url)
+
+        response = self.client.post(url, follow=True)
+
+        self.assertEqual(int(self.client.session["_auth_user_id"]), self.admin.pk)
+        self.assertEqual(response.request["PATH_INFO"], reverse("accounts:passkey_required"))
+
+    def test_a_post_signs_you_in_and_lands_on_enrolment(self):
+        _, url = self.issue()
+
+        response = self.client.post(url, follow=True)
 
         self.assertEqual(int(self.client.session["_auth_user_id"]), self.admin.pk)
         self.assertEqual(response.request["PATH_INFO"], reverse("accounts:passkey_required"))
 
     def test_it_works_exactly_once(self):
         _, url = self.issue()
-        self.client.get(url)
+        self.client.post(url)
 
         second = Client(HTTP_HOST=self.TEST_DOMAIN)
-        response = second.get(url)
+        response = second.post(url)
 
         self.assertEqual(response.status_code, 400)
         self.assertNotIn("_auth_user_id", second.session)
+
+    def test_a_fetch_that_never_posts_leaves_the_link_alive_for_the_real_click(self):
+        """
+        The actual production scenario: something fetches the link (GET) well before
+        the recipient clicks through. The recipient's own click must still work.
+        """
+        _, url = self.issue()
+
+        prefetcher = Client(HTTP_HOST=self.TEST_DOMAIN)
+        prefetcher.get(url)
+
+        response = self.client.post(url, follow=True)
+
+        self.assertEqual(int(self.client.session["_auth_user_id"]), self.admin.pk)
 
     def test_an_expired_row_is_refused_even_though_the_signature_is_good(self):
         """
@@ -172,7 +212,7 @@ class LinkConsumeTests(TenantTestCase):
         them would tell whoever holds a stale link whether the account is real.
         """
         link, used = self.issue()
-        self.client.get(used)
+        self.client.post(used)
 
         forged = reverse(
             "accounts:link_consume",
@@ -202,7 +242,7 @@ class LinkConsumeTests(TenantTestCase):
         self.admin.is_active = False
         self.admin.save()
 
-        response = self.client.get(url)
+        response = self.client.post(url)
 
         self.assertEqual(response.status_code, 400)
         self.assertNotIn("_auth_user_id", self.client.session)
@@ -210,7 +250,7 @@ class LinkConsumeTests(TenantTestCase):
     def test_using_a_link_is_audited(self):
         _, url = self.issue()
 
-        self.client.get(url)
+        self.client.post(url)
 
         self.assertTrue(AuditEvent.objects.filter(action=AuditAction.LINK_USED).exists())
         login = AuditEvent.objects.filter(action=AuditAction.LOGIN).first()
@@ -220,7 +260,7 @@ class LinkConsumeTests(TenantTestCase):
         """Consumed, not deleted — the trail should show that it was used, and when."""
         link, url = self.issue()
 
-        self.client.get(url)
+        self.client.post(url)
 
         link.refresh_from_db()
         self.assertIsNotNone(link.consumed_at)
@@ -240,7 +280,7 @@ class RecoveryNotificationTests(TenantTestCase):
         _, url = link_service.issue_link(self.admin, LinkPurpose.RECOVERY)
         mail.outbox.clear()
 
-        self.client.get(url)
+        self.client.post(url)
 
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ["jo@church.ca"])
@@ -250,7 +290,7 @@ class RecoveryNotificationTests(TenantTestCase):
         _, url = link_service.issue_link(self.admin, LinkPurpose.RECOVERY)
         mail.outbox.clear()
 
-        self.client.get(url)
+        self.client.post(url)
 
         self.assertNotIn("sam@church.ca", mail.outbox[0].to)
 
@@ -259,7 +299,7 @@ class RecoveryNotificationTests(TenantTestCase):
         _, url = link_service.issue_link(self.admin, LinkPurpose.INVITE)
         mail.outbox.clear()
 
-        self.client.get(url)
+        self.client.post(url)
 
         self.assertEqual(mail.outbox, [])
 
@@ -390,7 +430,7 @@ class CrossSchemaTests(TenantTestCase):
             _, url = link_service.issue_link(other_admin, LinkPurpose.INVITE)
             expected_pk = other_admin.pk
 
-        self.client.get(url)
+        self.client.post(url)
 
         self.assertEqual(int(self.client.session["_auth_user_id"]), expected_pk)
         from apps.tenants.routing import TENANT_COOKIE_NAME

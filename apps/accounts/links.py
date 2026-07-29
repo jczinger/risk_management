@@ -147,16 +147,24 @@ def absolute_url(payload: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def consume_link(request, payload: str) -> tuple[User, LoginLink]:
+def verify_link(request, payload: str) -> tuple[User, LoginLink]:
     """
-    Validate ``payload``, bind the connection to its schema, and mark it spent.
+    Validate ``payload`` and bind the connection to its schema, without spending it.
 
-    Raises :class:`LinkError` for every failure with one shared message. The caller is
-    responsible for signing the user in — this deliberately stops one step short, so the
-    session is created by the same helper every other sign-in path uses.
+    Split out from :func:`consume_link` so a ``GET`` can show whoever is holding a link
+    that it still works — without spending it. That matters because a ``GET`` is not
+    only reached by a person: a chat app building a preview, or a mail gateway scanning
+    the link, will fetch it too, and unlike a person neither will ever submit the form
+    that calls :func:`consume_link`. Spending here would hand the ability to sign in to
+    whichever of them got there first, silently, before the real recipient's own click —
+    which is exactly what happened in production before this split existed.
 
-    On success the connection is bound to the account's schema and stays that way, and
-    ``request.vms_login_target`` carries the target for the tenant cookie.
+    Binding the connection is what makes the token even queryable — :class:`LoginLink`
+    lives in the account's own schema — and it is safely request-scoped: nothing here
+    persists past the response, so calling this twice (once for the ``GET``, again for
+    the ``POST``) leaves nothing behind between them.
+
+    Raises :class:`LinkError` for every failure with one shared message.
     """
     from apps.tenants import routing
 
@@ -184,9 +192,22 @@ def consume_link(request, payload: str) -> tuple[User, LoginLink]:
         logger.info("Rejected an unusable sign-in link schema=%s", schema)
         raise LinkError(GENERIC_ERROR)
 
-    link.consume()
     request.vms_login_target = target
     return link.user, link
+
+
+def consume_link(request, payload: str) -> tuple[User, LoginLink]:
+    """
+    Validate ``payload`` and mark it spent — the one moment a link is actually used.
+
+    Only ever called from the ``POST`` a person submits by clicking through the
+    confirmation page ``verify_link`` renders for the ``GET``. The caller is
+    responsible for signing the user in — this deliberately stops one step short, so the
+    session is created by the same helper every other sign-in path uses.
+    """
+    user, link = verify_link(request, payload)
+    link.consume()
+    return user, link
 
 
 def _max_age() -> int:
