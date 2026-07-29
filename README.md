@@ -20,6 +20,8 @@ There are no volunteer or pastor logins in Stage 1.
   per church — rename, re-time, add, deactivate.
 - **Age rules.** Under-18s are screened identically but exempt from the criminal record check,
   which switches on automatically when they turn 18 with the policy's three-month deadline.
+- **Requirement dependencies.** One requirement can wait on another — refresher training is not
+  owed until orientation is recorded, and then falls due a year after the orientation date.
 - **Criminal record checks.** Cleared sets a three-year clock from the report date. Not Clear
   blocks the volunteer. Automatic disqualifiers are permanent with no override anywhere.
   Discretionary red flags require a documented leadership decision.
@@ -130,7 +132,7 @@ work in development without TLS.
 .venv/bin/python -m pytest apps/requirements  # one area
 ```
 
-480 tests, including the `pg_dump` leak check, tenant isolation, shared-hostname routing, the
+519 tests, including the `pg_dump` leak check, tenant isolation, shared-hostname routing, the
 age rules, and a render sweep over every page.
 
 ---

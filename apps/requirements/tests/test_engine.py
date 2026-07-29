@@ -660,14 +660,30 @@ class RequirementRowActionTests(TenantTestCase):
 
         Each one needs either a document route or a completion button, or an admin has
         no way to satisfy it short of a waiver.
+
+        A gated requirement is exempt while it waits — the refresher training offers no
+        action until orientation is recorded, which is the point of the gate rather than
+        a dead end. ``test_a_released_gate_offers_its_action`` covers the other half.
         """
         for instance in self.volunteer.requirement_instances.select_related("definition"):
             with self.subTest(requirement=instance.definition.name):
                 self.assertTrue(
                     instance.definition.requires_document
                     or instance.definition.is_crc
+                    or instance.definition.unmet_prerequisite(self.volunteer) is not None
                     or "Mark complete" in self.row_for(instance),
                 )
+
+    def test_a_released_gate_offers_its_action(self):
+        """The other half: once the prerequisite is done, the dead end must open."""
+        from apps.requirements.services import mark_requirement_complete
+
+        orientation = self.instance_for("Plan to Protect orientation training")
+        mark_requirement_complete(orientation, timezone.localdate())
+
+        refresher = self.instance_for("Plan to Protect refresher training")
+        self.assertEqual(refresher.status, RequirementStatus.NOT_STARTED)
+        self.assertIn("Mark complete", self.row_for(refresher))
 
     def test_the_button_is_labelled_as_a_status_change(self):
         row = self.row_for(self.instance_for("Interview"))

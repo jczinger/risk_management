@@ -35,7 +35,19 @@
       <dt>Age rule</dt><dd>{{ definition.get_age_rule_display }}</dd>
       <dt>Order</dt><dd>{{ definition.sequence }}{% if definition.is_onboarding %} · part of onboarding{% endif %}</dd>
       <dt>Depends on</dt>
-      <dd>{% if definition.must_follow %}<a href="{% url 'requirements:definition_detail' definition.must_follow.pk %}">{{ definition.must_follow.name }}</a>{% else %}<span class="faint">Nothing</span>{% endif %}</dd>
+      <dd>
+        {% if definition.must_follow %}
+          <a href="{% url 'requirements:definition_detail' definition.must_follow.pk %}">{{ definition.must_follow.name }}</a>
+          <div class="small muted">
+            {% if definition.is_gated %}
+              Not applicable until that is complete{% if definition.prerequisite_offset_months %},
+              then due {{ definition.prerequisite_offset_months }} months after it{% endif %}.
+            {% else %}
+              Warns if recorded out of order, but does not stop it.
+            {% endif %}
+          </div>
+        {% else %}<span class="faint">Nothing</span>{% endif %}
+      </dd>
       <dt>Document expected</dt><dd>{% if definition.requires_document %}Yes{% else %}No{% endif %}</dd>
       <dt>Status</dt><dd>{% if definition.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</dd>
       <dt>Origin</dt><dd>{% if definition.is_seeded %}Standard template{% else %}Added by this church{% endif %}</dd>

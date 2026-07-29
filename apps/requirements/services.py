@@ -45,6 +45,7 @@ logger = logging.getLogger("vms.requirements")
 REASON_NO_ROLE = "No current role requires this"
 REASON_UNDER_18 = "Under 18 — no criminal record check required"
 REASON_NO_BIRTH_DATE = "Date of birth not recorded — age rule cannot be applied"
+REASON_PREREQUISITE = "Not required until {name} is complete"
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +72,11 @@ def sync_volunteer_requirements(
     """
     as_of = as_of or timezone.localdate()
     roles = list(volunteer.active_roles)
-    definitions = RequirementDefinition.objects.active().prefetch_related("roles")
+    definitions = (
+        RequirementDefinition.objects.active()
+        .select_related("must_follow")
+        .prefetch_related("roles")
+    )
     existing = {i.definition_id: i for i in volunteer.requirement_instances.all()}
 
     created, updated, retired = 0, 0, 0
@@ -101,12 +106,19 @@ def sync_volunteer_requirements(
             continue
 
         age_exempt = definition.is_age_exempt(volunteer, as_of)
+        # Age exemption takes precedence: it is a rule about the person, the gate is a
+        # rule about the paperwork. An under-18 reads "Applies to adults (18+) only",
+        # which is the more useful thing to be told.
+        blocked_by = None if age_exempt else definition.unmet_prerequisite(volunteer)
 
         if instance is None:
             instance = RequirementInstance(volunteer=volunteer, definition=definition)
             if age_exempt:
                 instance.status = RequirementStatus.NOT_APPLICABLE
                 instance.not_applicable_reason = _age_exempt_reason(volunteer, definition)
+            elif blocked_by is not None:
+                instance.status = RequirementStatus.NOT_APPLICABLE
+                instance.not_applicable_reason = _prerequisite_reason(blocked_by)
             instance.save()
             created += 1
             if not quiet:
@@ -120,7 +132,9 @@ def sync_volunteer_requirements(
                 )
             continue
 
-        changed = _reconcile_existing(instance, volunteer, definition, age_exempt, as_of, quiet)
+        changed = _reconcile_existing(
+            instance, volunteer, definition, age_exempt, blocked_by, as_of, quiet
+        )
         updated += int(changed)
 
     return {"created": created, "updated": updated, "retired": retired}
@@ -132,39 +146,128 @@ def _age_exempt_reason(volunteer: Volunteer, definition: RequirementDefinition) 
     return REASON_UNDER_18 if definition.is_crc else "Applies to adults (18+) only"
 
 
+def _prerequisite_reason(blocked_by: RequirementInstance) -> str:
+    """Why a gated requirement is not applicable yet. Truncated to the column."""
+    return REASON_PREREQUISITE.format(name=blocked_by.definition.name)[:200]
+
+
+def _prerequisite_deadline(
+    volunteer: Volunteer, definition: RequirementDefinition
+) -> tuple[datetime.date | None, str]:
+    """
+    When a gated requirement falls due, counted from its prerequisite's completion.
+
+    Returns ``(None, "")`` when there is no date to count from. That happens when the
+    prerequisite was waived or ruled not applicable rather than completed, and when the
+    dependent has no interval of its own and no explicit offset. No date is invented in
+    either case — the requirement simply becomes outstanding with no deadline, which is
+    how most onboarding requirements already behave.
+    """
+    months = definition.prerequisite_offset_months
+    if not months:
+        return None, ""
+
+    prior = (
+        volunteer.requirement_instances.select_related("definition")
+        .filter(definition_id=definition.must_follow_id)
+        .first()
+    )
+    if prior is None or not prior.completed_on:
+        return None, ""
+
+    due_on = add_months_to(prior.completed_on, months)
+    reason = (
+        f"{prior.definition.name} was completed on {prior.completed_on:%-d %b %Y}; "
+        f"this falls due {months} months later."
+    )
+    return due_on, reason[:200]
+
+
+def _hold_not_applicable(
+    instance: RequirementInstance,
+    reason: str,
+) -> bool:
+    """Park an outstanding instance as not-applicable, clearing any deadline with it."""
+    instance.status = RequirementStatus.NOT_APPLICABLE
+    instance.not_applicable_reason = reason
+    instance.due_on = None
+    instance.due_reason = ""
+    instance.save(
+        update_fields=[
+            "status",
+            "not_applicable_reason",
+            "due_on",
+            "due_reason",
+            "updated_at",
+        ]
+    )
+    return True
+
+
 def _reconcile_existing(
     instance: RequirementInstance,
     volunteer: Volunteer,
     definition: RequirementDefinition,
     age_exempt: bool,
+    blocked_by: RequirementInstance | None,
     as_of: datetime.date,
     quiet: bool,
 ) -> bool:
     """Move an existing instance between applicable and not-applicable states."""
     # Newly exempt (age recorded for the first time, revealing they are a minor).
     if age_exempt and instance.status in RequirementStatus.outstanding_values():
-        instance.status = RequirementStatus.NOT_APPLICABLE
-        instance.not_applicable_reason = _age_exempt_reason(volunteer, definition)
-        instance.due_on = None
-        instance.due_reason = ""
-        instance.save(
-            update_fields=[
-                "status",
-                "not_applicable_reason",
-                "due_on",
-                "due_reason",
-                "updated_at",
-            ]
-        )
-        return True
+        return _hold_not_applicable(instance, _age_exempt_reason(volunteer, definition))
 
-    # No longer exempt: they have turned 18, or a role now requires this after all.
+    # Newly gated — the prerequisite was un-completed, or the dependency was only just
+    # configured. Completed history is left alone, as with the age rule.
+    if blocked_by is not None and instance.status in RequirementStatus.outstanding_values():
+        return _hold_not_applicable(instance, _prerequisite_reason(blocked_by))
+
+    # Still waiting on a prerequisite. Without this the branch below would treat a
+    # gated instance as merely age-exempt-no-longer and switch it straight on.
+    if blocked_by is not None:
+        return False
+
+    # No longer exempt: they have turned 18, a role now requires this after all, or the
+    # prerequisite has been satisfied.
     if not age_exempt and instance.status == RequirementStatus.NOT_APPLICABLE:
         return _activate(instance, volunteer, definition, as_of, quiet)
 
-    # Already active and applicable: nothing structural to change. The nightly
-    # recompute handles the date-driven status transitions.
+    # Already active and applicable. Nothing structural to change, but a gated
+    # requirement's deadline is *derived* from the prerequisite's completion date, and
+    # a derived value goes stale when its source is corrected. Re-deriving here means a
+    # fixed-up orientation date reaches the refresher on the next sync rather than
+    # leaving a deadline nobody can explain.
+    if (
+        definition.is_gated
+        and not instance.completed_on
+        and instance.status in RequirementStatus.outstanding_values()
+    ):
+        return _refresh_prerequisite_deadline(instance, volunteer, definition)
+
+    # The nightly recompute handles the date-driven status transitions.
     return False
+
+
+def _refresh_prerequisite_deadline(
+    instance: RequirementInstance,
+    volunteer: Volunteer,
+    definition: RequirementDefinition,
+) -> bool:
+    """Keep a released gate's deadline in step with the date it was derived from."""
+    deadline, reason = _prerequisite_deadline(volunteer, definition)
+    if deadline is None or deadline == instance.due_on:
+        return False
+
+    # A requirement can be under two clocks — a turning-18 deadline as well as this
+    # one. The earlier governs, which is what effective_due_date already assumes.
+    if instance.due_on and instance.due_on < deadline:
+        return False
+
+    instance.due_on = deadline
+    instance.due_reason = reason
+    instance.save(update_fields=["due_on", "due_reason", "updated_at"])
+    return True
 
 
 def _activate(
@@ -180,6 +283,10 @@ def _activate(
     For the criminal record check on turning 18 this attaches the policy's three-month
     deadline, counted from the 1st of the birth month of their 18th year
     (Build Spec §4.4).
+
+    For a gated requirement it attaches a deadline counted from the *prerequisite's*
+    completion — refresher training a year after the orientation, not a year after the
+    gate happened to open.
     """
     instance.status = RequirementStatus.NOT_STARTED
     previous_reason = instance.not_applicable_reason
@@ -195,6 +302,14 @@ def _activate(
                 "submit a criminal record check."
             )
             summary = f"Criminal record check activated on turning 18 — due {instance.due_on}"
+    elif definition.is_gated:
+        deadline, reason = _prerequisite_deadline(volunteer, definition)
+        if deadline:
+            instance.due_on = deadline
+            instance.due_reason = reason
+            summary = f"{definition.must_follow.name} completed — due {deadline}"
+        else:
+            summary = f"{definition.must_follow.name} satisfied — requirement now applies"
 
     instance.save(
         update_fields=[
@@ -254,6 +369,7 @@ def mark_requirement_complete(
         + (f", expires {instance.expires_on}" if instance.expires_on else ", no expiry"),
         detail={"changed": _diff(before, _snapshot(instance))},
     )
+    refresh_dependents(instance)
     return instance
 
 
@@ -331,7 +447,36 @@ def waive_requirement(
         # The reason is encrypted in the instance and again here in the audit detail.
         detail={"reason": reason, "changed": _diff(before, _snapshot(instance))},
     )
+    # A waiver counts as the prerequisite being met, so it can open a gate behind it.
+    refresh_dependents(instance)
     return instance
+
+
+def refresh_dependents(instance: RequirementInstance, *, quiet: bool = True) -> int:
+    """
+    Re-derive anything gated behind ``instance`` for this volunteer.
+
+    A gate stores nothing — it is derived from the prerequisite's current state every
+    time ``sync_volunteer_requirements`` runs — so reacting to a change is simply
+    running the sync again. The ``exists()`` guard keeps the overwhelmingly common case
+    (nothing depends on this) to one indexed query.
+
+    Called explicitly from each path that changes a prerequisite's state rather than
+    from a ``post_save`` signal: the sync saves instances itself, so a signal would be
+    re-entrant, and ``signals.py`` is by convention the bridge from the org models, not
+    a home for requirement rules.
+
+    Missing a call is not a correctness problem, only a latency one — the nightly sweep
+    re-syncs every volunteer, so a gate is right within a day either way.
+    """
+    from .models import DependencyMode
+
+    has_dependents = instance.definition.followed_by.filter(
+        dependency_mode=DependencyMode.GATE, is_active=True
+    ).exists()
+    if not has_dependents:
+        return 0
+    return sync_volunteer_requirements(instance.volunteer, quiet=quiet)["updated"]
 
 
 def _status_after_reversal(instance: RequirementInstance) -> str:
@@ -421,6 +566,8 @@ def reverse_waiver(
             "changed": _diff(before, _snapshot(instance)),
         },
     )
+    # And reversing it puts the prerequisite back in play, re-imposing any gate.
+    refresh_dependents(instance)
     return instance
 
 
@@ -501,6 +648,9 @@ def record_crc(
                     "updated_at",
                 ]
             )
+            # record_crc completes the instance inline rather than through
+            # mark_requirement_complete, so the dependency hook has to be repeated here.
+            refresh_dependents(instance)
         # A cleared check resolves a previous Not Clear block, but never a permanent
         # disqualification (guarded above and in set_screening_block).
         if volunteer.screening_block == ScreeningBlock.CRC_NOT_CLEAR:
@@ -514,6 +664,9 @@ def record_crc(
             instance.save(
                 update_fields=["status", "completed_on", "expires_on", "updated_at"]
             )
+            # Not Clear nulls the completion date, so anything gated behind this check
+            # is held again.
+            refresh_dependents(instance)
         volunteer.set_screening_block(ScreeningBlock.CRC_NOT_CLEAR)
         summary = f"Criminal record check: NOT CLEAR ({report_date}) — volunteer blocked"
 
@@ -830,6 +983,11 @@ def activate_turning_18_checks(as_of: datetime.date | None = None) -> list[Requi
             continue
         # Only re-activate if a role still requires it.
         if not instance.definition.applies_to_volunteer(volunteer):
+            continue
+        # Turning 18 lifts the age exemption; it does not lift a prerequisite gate.
+        # Without this the nightly age scan would switch on a requirement that
+        # sync_volunteer_requirements is deliberately holding.
+        if instance.definition.unmet_prerequisite(volunteer) is not None:
             continue
         _activate(instance, volunteer, instance.definition, as_of, quiet=False)
         activated.append(instance)

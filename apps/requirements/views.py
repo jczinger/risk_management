@@ -315,6 +315,13 @@ def _unmet_dependency(instance: RequirementInstance) -> RequirementInstance | No
     release before references) matters, but an admin recording historical paperwork
     out of order should not be stopped — they should be told.
     """
+    if instance.definition.is_gated:
+        # The gating half of the rule speaks for itself: the requirement is sitting at
+        # not-applicable with the prerequisite named in its reason, and completion is
+        # already refused. A second callout would read as a warning about something the
+        # admin could push past, which is the opposite of what a gate is.
+        return None
+
     predecessor = instance.definition.must_follow
     if predecessor is None:
         return None

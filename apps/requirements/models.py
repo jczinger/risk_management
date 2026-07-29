@@ -45,6 +45,10 @@ ONBOARDING_WINDOW_MONTHS = 3
 #: (Build Spec §4.4).
 TURNING_18_CRC_DEADLINE_MONTHS = 3
 
+#: How far a dependency chain is walked before it is treated as a loop. Chains are one
+#: or two hops in practice; this only has to terminate.
+MAX_DEPENDENCY_HOPS = 20
+
 
 class RequirementType(models.TextChoices):
     """
@@ -100,6 +104,24 @@ class AgeRule(models.TextChoices):
 
     NONE = "none", "Applies at any age"
     ADULTS_ONLY = "adults_only", "Adults only (18+)"
+
+
+class DependencyMode(models.TextChoices):
+    """
+    What ``must_follow`` actually does.
+
+    ``WARN`` is the original behaviour and the default, so adding this field changed
+    nothing for requirements that already had a dependency: an admin filing historical
+    paperwork out of order is told, not stopped.
+
+    ``GATE`` makes the dependency load-bearing. The requirement does not apply until the
+    prerequisite is satisfied, and its deadline is then counted from the prerequisite's
+    completion — refresher training a year after the orientation it follows, rather than
+    a year after the volunteer was added.
+    """
+
+    WARN = "warn", "Warn if completed out of order"
+    GATE = "gate", "Does not apply until the prerequisite is complete"
 
 
 class RequirementStatus(models.TextChoices):
@@ -215,9 +237,32 @@ class RequirementDefinition(TimeStampedModel, NoDeleteModel):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="followed_by",
+        verbose_name="depends on",
         help_text=(
-            "Optional ordering rule. The policy requires the liability release to be "
-            "signed before reference checks are sought, for example."
+            "Optional. Another requirement this one follows — the policy requires the "
+            "liability release before references are sought, for example. What that "
+            "means in practice is set by the dependency rule below."
+        ),
+    )
+    dependency_mode = models.CharField(
+        max_length=8,
+        choices=DependencyMode.choices,
+        default=DependencyMode.WARN,
+        verbose_name="dependency rule",
+        help_text=(
+            "Warn: an admin recording paperwork out of order is told, but not stopped. "
+            "Gate: this does not apply at all until the other is complete, and its "
+            "deadline is counted from that completion."
+        ),
+    )
+    due_months_after_prerequisite = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(600)],
+        verbose_name="months after the prerequisite",
+        help_text=(
+            "Gate only. Leave blank to use this requirement's own cadence — an annual "
+            "refresher then falls due a year after the training it follows."
         ),
     )
 
@@ -265,9 +310,50 @@ class RequirementDefinition(TimeStampedModel, NoDeleteModel):
 
         if self.must_follow_id and self.must_follow_id == self.pk:
             errors["must_follow"] = "A requirement cannot depend on itself."
+        elif self.must_follow_id and self._dependency_cycle():
+            errors["must_follow"] = (
+                "That would create a loop — the requirement you picked already depends "
+                "on this one, directly or through another."
+            )
+
+        if self.dependency_mode == DependencyMode.GATE and not self.must_follow_id:
+            errors["dependency_mode"] = (
+                "Choose the requirement this one depends on, or leave the rule as a warning."
+            )
+        if self.due_months_after_prerequisite and not self.must_follow_id:
+            errors["due_months_after_prerequisite"] = (
+                "Only used when this requirement depends on another one."
+            )
 
         if errors:
             raise ValidationError(errors)
+
+    def _dependency_cycle(self) -> bool:
+        """
+        Whether following ``must_follow`` from here leads back to this requirement.
+
+        Direct self-reference is caught separately; this is the A→B→A case. It mattered
+        little while the field only produced a warning, but a gate that loops would
+        leave every requirement in the loop permanently not-applicable, each waiting on
+        the next.
+
+        The hop limit is a backstop against a loop that predates this check — the seed
+        writes ``must_follow`` with ``save()``, which never runs ``clean()``.
+        """
+        seen = {self.pk} if self.pk else set()
+        current_id = self.must_follow_id
+        for _ in range(MAX_DEPENDENCY_HOPS):
+            if current_id is None:
+                return False
+            if current_id in seen:
+                return True
+            seen.add(current_id)
+            current_id = (
+                RequirementDefinition.objects.filter(pk=current_id)
+                .values_list("must_follow_id", flat=True)
+                .first()
+            )
+        return True
 
     # -- Cadence ----------------------------------------------------------
 
@@ -333,6 +419,106 @@ class RequirementDefinition(TimeStampedModel, NoDeleteModel):
     @property
     def is_crc(self) -> bool:
         return self.requirement_type == RequirementType.CRIMINAL_RECORD_CHECK
+
+    # -- Dependencies -----------------------------------------------------
+
+    @property
+    def is_gated(self) -> bool:
+        """True when this requirement waits on another before it applies at all."""
+        return self.dependency_mode == DependencyMode.GATE and self.must_follow_id is not None
+
+    @property
+    def prerequisite_offset_months(self) -> int | None:
+        """
+        Months from the prerequisite's completion to this requirement's deadline.
+
+        Falls back to this requirement's own cadence, which is what makes the common
+        case need no configuration: an annual refresher following orientation is due a
+        year after the orientation. A one-time gated requirement has no interval either,
+        and so gets no deadline — it simply becomes outstanding once the gate opens.
+        """
+        if self.due_months_after_prerequisite:
+            return self.due_months_after_prerequisite
+        return self.interval_months
+
+    def dependent_pks(self) -> set[int]:
+        """
+        This requirement and everything that transitively depends on it.
+
+        Used to keep loops out of the "depends on" dropdown: offering any of these
+        would let an admin build a cycle the model would then have to reject.
+        """
+        found = {self.pk}
+        frontier = {self.pk}
+        for _ in range(MAX_DEPENDENCY_HOPS):
+            frontier = set(
+                RequirementDefinition.objects.filter(must_follow_id__in=frontier)
+                .exclude(pk__in=found)
+                .values_list("pk", flat=True)
+            )
+            if not frontier:
+                break
+            found |= frontier
+        return found
+
+    def unmet_prerequisite(self, volunteer: Volunteer):
+        """
+        The prerequisite instance blocking this requirement, or None for "not blocked".
+
+        **Everything here fails open.** A gate that wrongly holds is invisible
+        non-compliance — a held requirement buckets as *satisfied* — while a gate that
+        wrongly releases is visible work an admin can see and act on. So a missing
+        instance, a retired prerequisite, one that does not apply to this volunteer, or
+        a chain too deep to follow all leave the requirement ungated.
+
+        What counts as met, and why:
+
+        * **Anything with a completion date**, even an expired one. Deliberately *not*
+          ``satisfied_values()``, which excludes an expired-and-now-overdue row. Using
+          that would mean a lapsed prerequisite pushes its dependent back to
+          not-applicable — and since that buckets as satisfied, a lapse would *reduce*
+          the church's apparent workload. A gate asks "has this ever happened", not "is
+          it current"; the prerequisite's own overdue row is what surfaces the lapse.
+        * **Waived**, and **not applicable**. Both are recorded decisions that the
+          prerequisite is not owed. Holding a refresher behind a waived orientation
+          would silently exempt someone from it forever.
+
+        The exception is a prerequisite that is *itself* gated. Its not-applicable is a
+        "not yet", not a "never needed", so it is still a step that has to happen and
+        everything behind it stays blocked. Determined structurally, from the
+        definition, rather than by reading the stored ``not_applicable_reason`` — string
+        matching on a stored reason is how the reminder classifier became fragile.
+
+        No recursion: a chain resolves one link per sync pass, and the nightly sweep
+        re-syncs everyone, so a three-step chain settles without walking it here. That
+        also means a loop written straight to the database cannot spin this method.
+        """
+        if not self.is_gated:
+            return None
+
+        prerequisite = self.must_follow
+        if prerequisite is None or not prerequisite.is_active:
+            # A church that retires the orientation must not freeze every refresher.
+            return None
+
+        prior = (
+            volunteer.requirement_instances.select_related("definition")
+            .filter(definition_id=self.must_follow_id)
+            .first()
+        )
+        if prior is None:
+            # No instance means the prerequisite does not apply to this volunteer, so
+            # there is nothing here for them to wait for.
+            return None
+
+        if prior.completed_on:
+            return None
+        if prior.status == RequirementStatus.WAIVED:
+            return None
+        if prior.status == RequirementStatus.NOT_APPLICABLE and not prior.definition.is_gated:
+            return None
+
+        return prior
 
 
 class RequirementInstanceQuerySet(NoDeleteQuerySet):

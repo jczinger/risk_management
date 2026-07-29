@@ -17,13 +17,22 @@ from __future__ import annotations
 
 import logging
 
-from .models import AgeRule, AppliesTo, Cadence, RequirementDefinition, RequirementType
+from .models import (
+    AgeRule,
+    AppliesTo,
+    Cadence,
+    DependencyMode,
+    RequirementDefinition,
+    RequirementType,
+)
 
 logger = logging.getLogger("vms.requirements")
 
-# Ordered as the policy sequences onboarding. `key` is internal, used to wire up the
-# one dependency (references must follow the liability release) and to let a re-seed
-# recognise what it already created.
+# Ordered as the policy sequences onboarding. `key` is internal: it wires up the
+# dependencies and lets a re-seed recognise what it already created.
+#
+# A prerequisite MUST appear before whatever depends on it — seed_default_template
+# resolves `must_follow_key` against what it has created so far, in one pass.
 SEED_TEMPLATE: list[dict] = [
     {
         "key": "waiting_period",
@@ -93,6 +102,9 @@ SEED_TEMPLATE: list[dict] = [
         "appendix_reference": "Appendix 4 / Appendix 5",
         "requires_document": True,
         "must_follow_key": "liability_release",
+        # A warning, not a bar: an admin filing historical paperwork out of order is
+        # told, not stopped (BUILD_NOTES §1.18).
+        "dependency_mode": DependencyMode.WARN,
         "description": (
             "Obtain at least two references, one of which is from the applicant's "
             "current or previous pastor. Record the content of each reference in the "
@@ -174,7 +186,8 @@ SEED_TEMPLATE: list[dict] = [
         "description": (
             "Orientation training, completed before the volunteer is placed. Enter the "
             "completion date manually — this system does not connect to the training "
-            "provider."
+            "provider. That date is what starts the refresher clock: the refresher "
+            "falls due one year after it."
         ),
     },
     {
@@ -185,7 +198,15 @@ SEED_TEMPLATE: list[dict] = [
         "applies_to": AppliesTo.ALL_ROLES,
         "sequence": 110,
         "is_onboarding": False,
-        "description": "Annual refresher training. Enter each year's completion date.",
+        "must_follow_key": "training_orientation",
+        "dependency_mode": DependencyMode.GATE,
+        # No explicit offset: the annual cadence already supplies the twelve months.
+        "description": (
+            "Annual refresher training. Stays 'not applicable' until orientation "
+            "training is recorded, then falls due one year after the orientation date, "
+            "and annually from each refresher after that. Enter each year's completion "
+            "date manually."
+        ),
     },
     {
         "key": "code_of_conduct",
@@ -230,13 +251,24 @@ SEED_TEMPLATE: list[dict] = [
 ]
 
 
-def seed_default_template(*, skip_existing: bool = True) -> int:
+def seed_default_template() -> int:
     """
     Create the starter requirements in the current tenant schema.
 
-    Returns how many were created. Safe to re-run: an existing definition with the
-    same name is left exactly as the church has edited it, so re-seeding never
-    reverts a church's customisations.
+    Returns how many were created. Safe to re-run: an existing definition with the same
+    name is left **entirely** alone, its dependency settings included. Re-seeding adds
+    what is missing and touches nothing else.
+
+    Dependencies are wired at creation, which is why ``SEED_TEMPLATE`` must list a
+    prerequisite before whatever depends on it — asserted by
+    ``test_every_prerequisite_precedes_its_dependent``.
+
+    This used to run a second pass that rewrote ``must_follow`` on rows it had just
+    skipped, contradicting the paragraph above and silently overwriting an admin who had
+    pointed a dependency somewhere else. It also meant a change to the template could
+    alter a church's live behaviour the moment someone clicked "re-apply". Now it
+    cannot: an existing church picks up a new dependency only when an admin sets it,
+    deliberately, on the requirement's own page.
 
     Must be called inside a tenant schema with the tenant's key available — the
     definitions themselves hold no encrypted fields, but they live in the tenant's
@@ -253,24 +285,26 @@ def seed_default_template(*, skip_existing: bool = True) -> int:
         existing = RequirementDefinition.objects.filter(name=spec["name"]).first()
         if existing:
             by_key[key] = existing
-            if skip_existing:
-                continue
+            continue
+
+        if follows:
+            predecessor = by_key.get(follows)
+            spec["must_follow"] = predecessor
+            if predecessor is None:
+                # The prerequisite already existed under a name this church changed, so
+                # there is nothing to point at. Fall back to the harmless mode rather
+                # than leaving a gate with no gate-keeper.
+                spec.pop("dependency_mode", None)
+                logger.warning(
+                    "Seed: '%s' depends on '%s', which is not in this church's template; "
+                    "created without the dependency",
+                    spec["name"],
+                    follows,
+                )
 
         definition = RequirementDefinition.objects.create(is_seeded=True, **spec)
         by_key[key] = definition
         created += 1
-
-    # Wire the one ordering rule the policy specifies: the liability release must
-    # precede reference checks.
-    for entry in SEED_TEMPLATE:
-        follows = entry.get("must_follow_key")
-        if not follows:
-            continue
-        target = by_key.get(entry["key"])
-        predecessor = by_key.get(follows)
-        if target and predecessor and target.must_follow_id != predecessor.pk:
-            target.must_follow = predecessor
-            target.save(update_fields=["must_follow", "updated_at"])
 
     logger.info("Seeded %d requirement definitions", created)
     return created

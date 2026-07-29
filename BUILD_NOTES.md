@@ -346,7 +346,82 @@ have decrypted personal information into a response for no reason.
 sees. Anything a human is meant to read has to go there, within 255 characters — see the waiver
 reversal in §1.8.
 
-### 1.17 Deliberate omissions
+### 1.18 Requirement dependencies: a warning by default, a gate by opt-in
+
+**Added 2026-07-28, at the operator's request.** A requirement can now be held
+not-applicable until its prerequisite is complete, and its first deadline counted from
+the *prerequisite's* completion date. The driving case: refresher training is not owed
+until orientation has happened, and then falls due a year after it.
+
+**Extended `must_follow` rather than adding a second field.** The FK already existed and
+the console already labelled it "Depends on" — but it was advisory only, read in exactly
+one view function to render an "out of order" callout, and never reaching the service
+layer. Two self-FKs both meaning "comes after X" would drift, double the cycle surface,
+and need a rule for what happens when they disagree. So it gained a `dependency_mode`
+instead: warn (the original behaviour) or gate.
+
+**The default is the compatibility guarantee.** Every existing church has
+`reference_checks → liability_release` in their database. `WARN` is the field default, so
+the upgrade is inert — no data migration, nothing to remember at deploy time, and that
+pair keeps behaving exactly as it did. Asserted by
+`test_the_seeded_reference_check_dependency_is_only_a_warning`.
+
+**The offset defaults to the dependent's own cadence.** An annual refresher following
+orientation needs no configuration at all: annual already means twelve months. An
+explicit `due_months_after_prerequisite` overrides it, for the "first one at six months,
+annually after that" shape. A one-time dependent has neither, and gets no deadline — the
+requirement simply becomes outstanding. No date is invented.
+
+**What counts as the prerequisite being met**, and why each arm is what it is:
+
+| Prerequisite | Met? | Anchor date |
+|---|---|---|
+| Has a completion date, even a lapsed one | Yes | that date |
+| Waived | Yes | none |
+| Not applicable (role or age) | Yes | none |
+| Not applicable *because it is itself gated* | **No** | — |
+| Blocked, not started, in progress, overdue with no completion | No | — |
+| No instance — it does not apply to this volunteer | Yes | none |
+| Its definition has been deactivated | Yes | none |
+
+Two of those deserve the reasoning spelled out. **A lapsed prerequisite still counts**:
+re-gating on a lapse would push the dependent back to not-applicable, which buckets as
+*satisfied* — so a lapse would **reduce** the church's apparent workload. A gate asks
+"has this ever happened", not "is it current"; the prerequisite's own overdue row is what
+surfaces the lapse. **A waived one counts too**: holding a refresher behind a waived
+orientation would silently exempt someone from refreshers forever.
+
+**Everything fails open.** A missing instance, an inapplicable or retired prerequisite —
+all leave the requirement ungated. A gate that wrongly holds is invisible non-compliance;
+a gate that wrongly releases is visible work an admin can see and act on. Same
+conservatism as §1.5.
+
+**Age exemption wins when both apply.** An age exemption says "this person does not need
+this"; a gate says "not yet". The age reason is the more useful thing to show. The nightly
+turning-18 scan needed its own guard, because it calls `_activate` directly and would
+otherwise switch on a requirement the sync is deliberately holding.
+
+**Chains resolve one link per pass, not recursively.** A → B → C settles over successive
+syncs, and the nightly sweep re-syncs everyone, so there is no chain walk at request time
+and a loop written straight to the database cannot spin. `clean()` refuses loops up front;
+the form goes further and excludes everything downstream from the dropdown, so one cannot
+be picked.
+
+**The accepted cost:** a gated requirement counts as compliant while it waits, because
+`NOT_APPLICABLE` buckets as satisfied. Same trade as the under-18 exemption, and the
+stated reason travels with the row onto the compliance table and the printed file.
+
+**The seed no longer retro-applies dependencies.** It used to rewrite `must_follow` on
+rows it had just skipped, every time an admin re-applied the template — contradicting its
+own docstring and, once the template named a gate, able to change a church's live
+behaviour with one click. Dependencies are now wired at creation only, which makes the
+order of `SEED_TEMPLATE` load-bearing (a prerequisite must precede its dependent) and is
+asserted by `test_every_prerequisite_precedes_its_dependent_in_the_template`. The
+consequence, stated plainly: **an existing church does not get the orientation → refresher
+rule automatically.** Their admin sets it on the refresher's own page, deliberately —
+which is right, because switching it on can put volunteers straight into overdue.
+
+### 1.19 Deliberate omissions
 
 Checked against Build Spec §0 ("DO NOT BUILD"). No code exists for: in-app forms or
 e-signature; Markdown role-description editing, versioning or acknowledgement tracking;
@@ -462,7 +537,7 @@ Recorded because each was a real defect, not a style preference.
 
 ## 5. Verification performed
 
-Full detail in `docs/ACCEPTANCE.md`. Summary: 480 automated tests pass, and the Docker Compose
+Full detail in `docs/ACCEPTANCE.md`. Summary: 519 automated tests pass, and the Docker Compose
 stack was brought up from a clean host, provisioned, backed up, destroyed and restored, with the
 restored personal data confirmed readable and still ciphertext at rest.
 

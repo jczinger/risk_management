@@ -52,9 +52,29 @@ class ReportingBase(TenantTestCase):
         self.assign(volunteer, role or self.teacher)
         sync_volunteer_requirements(volunteer)
         if complete_all:
-            for instance in volunteer.requirement_instances.filter(
+            self.complete_everything_outstanding(volunteer)
+        return volunteer
+
+    def complete_everything_outstanding(self, volunteer, *, skip_crc=False):
+        """
+        Complete every outstanding requirement, repeating until none reappear.
+
+        The repeat is not defensive padding. Completing the orientation training opens
+        the gate on the refresher, which was sitting at not-applicable and so was not in
+        the first pass's queryset at all. One pass leaves the volunteer owing a
+        requirement that did not exist when the pass began.
+        """
+        for _ in range(5):
+            outstanding = volunteer.requirement_instances.filter(
                 status__in=RequirementStatus.outstanding_values()
-            ):
+            )
+            if skip_crc:
+                outstanding = outstanding.exclude(
+                    definition__requirement_type=RequirementType.CRIMINAL_RECORD_CHECK
+                )
+            if not outstanding.exists():
+                return
+            for instance in list(outstanding):
                 if instance.definition.is_crc:
                     record_crc(
                         volunteer,
@@ -63,7 +83,7 @@ class ReportingBase(TenantTestCase):
                     )
                 else:
                     mark_requirement_complete(instance, timezone.localdate())
-        return volunteer
+        raise AssertionError("requirements kept reappearing — a dependency loop?")
 
 
 class EndToEndOnboardingTests(ReportingBase):
@@ -105,11 +125,10 @@ class EndToEndOnboardingTests(ReportingBase):
         )
         self.assertFalse(row.is_compliant)
 
-        # Step 4 — everything else except the criminal record check.
-        for instance in volunteer.requirement_instances.filter(
-            status__in=RequirementStatus.outstanding_values()
-        ).exclude(definition__requirement_type=RequirementType.CRIMINAL_RECORD_CHECK):
-            mark_requirement_complete(instance, timezone.localdate())
+        # Step 4 — everything else except the criminal record check. Takes more than one
+        # pass: completing the orientation training releases the refresher, which was
+        # not applicable, and therefore not outstanding, when the pass started.
+        self.complete_everything_outstanding(volunteer, skip_crc=True)
 
         row = next(
             r for r in build_compliance_report()["rows"] if r.volunteer.pk == volunteer.pk

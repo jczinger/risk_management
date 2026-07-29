@@ -21,6 +21,7 @@ from .models import (
     Cadence,
     CRCNotClearOutcome,
     CRCResult,
+    DependencyMode,
     DisqualifyingConviction,
     DiscretionaryOverride,
     RequirementDefinition,
@@ -51,6 +52,8 @@ class RequirementDefinitionForm(forms.ModelForm):
             "sequence",
             "is_onboarding",
             "must_follow",
+            "dependency_mode",
+            "due_months_after_prerequisite",
             "requires_document",
             "is_active",
         ]
@@ -65,9 +68,8 @@ class RequirementDefinitionForm(forms.ModelForm):
                 "requirement on when they turn 18."
             ),
             "must_follow": (
-                "Optional. Warns if this is completed before the requirement it "
-                "depends on — the policy requires the liability release before "
-                "references, for example."
+                "Optional. The requirement that comes first — the liability release "
+                "before references, or orientation training before the refresher."
             ),
         }
 
@@ -83,7 +85,10 @@ class RequirementDefinitionForm(forms.ModelForm):
 
         must_follow = RequirementDefinition.objects.active()
         if self.instance.pk:
-            must_follow = must_follow.exclude(pk=self.instance.pk)
+            # Exclude anything downstream of this requirement, not merely itself, so a
+            # loop cannot be picked in the first place. The model's clean() is still the
+            # backstop for anything that bypasses this form.
+            must_follow = must_follow.exclude(pk__in=self.instance.dependent_pks())
         self.fields["must_follow"].queryset = must_follow
         self.fields["must_follow"].empty_label = "No dependency"
 
@@ -95,6 +100,15 @@ class RequirementDefinitionForm(forms.ModelForm):
 
         if cleaned.get("applies_to") == AppliesTo.SPECIFIC_ROLES and not cleaned.get("roles"):
             self.add_error("roles", "Select at least one role, or choose a different rule.")
+
+        follows = cleaned.get("must_follow")
+        if not follows and cleaned.get("dependency_mode") == DependencyMode.GATE:
+            self.add_error("must_follow", "Choose the requirement this one waits for.")
+        if not follows and cleaned.get("due_months_after_prerequisite"):
+            self.add_error(
+                "due_months_after_prerequisite",
+                "Only applies when this requirement follows another one.",
+            )
 
         return cleaned
 

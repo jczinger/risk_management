@@ -263,6 +263,21 @@ This is deliberately not the same as an automatic disqualification, which cannot
 anyone. A waiver is an administrator's judgement; a disqualification is a safeguarding
 determination.
 
+**A volunteer's refresher training shows as "Not applicable".** Expected, while their
+orientation training is unrecorded — the row says which requirement it is waiting for. Record
+the orientation and the refresher switches on, due one year after the orientation date.
+
+**An existing church wants the orientation → refresher rule.** Re-applying the standard template
+will not do it, deliberately: re-seeding never changes a requirement a church already has. Go to
+Requirements → *Plan to Protect refresher training* → edit, set **Depends on** to the orientation
+and the dependency rule to *"Does not apply until the prerequisite is complete"*. Warn them
+first: anyone whose orientation is more than a year old goes overdue on the next nightly run.
+That is accurate, but it will look like a sudden spike.
+
+**A requirement is stuck as "Not applicable".** Check the prerequisite is still active and still
+applies to that volunteer's roles — if either is false the gate lifts on the next sync, so a
+requirement still stuck means the prerequisite is genuinely outstanding.
+
 **A church wants a requirement the template does not have.** They add it themselves — the
 requirement engine is fully editable per church, and the `custom` type plus the applies-to flags
 cover everything the policy review deferred.

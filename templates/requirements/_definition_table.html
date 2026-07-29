@@ -19,7 +19,7 @@
             <td>
               <a href="{% url 'requirements:definition_detail' definition.pk %}"><strong>{{ definition.name }}</strong></a>
               {% if definition.appendix_reference %}<div class="row-note">{{ definition.appendix_reference }}</div>{% endif %}
-              {% if definition.must_follow %}<div class="row-note">after: {{ definition.must_follow.name }}</div>{% endif %}
+              {% if definition.must_follow %}<div class="row-note">{% if definition.is_gated %}gated by{% else %}after{% endif %}: {{ definition.must_follow.name }}</div>{% endif %}
             </td>
             <td class="small">{{ definition.get_requirement_type_display }}</td>
             <td class="small nowrap">{{ definition.cadence_display }}</td>

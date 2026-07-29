@@ -65,11 +65,13 @@ Passkey registration and sign-in were additionally confirmed by hand in a browse
 - Provisioning creates exactly 14 definitions, verified both in the test suite and against the
   live deployment.
 - Each item's shape is asserted against Build Spec §4.2: the criminal record check is
-  `every_3_years` / `adults_only` / positions-of-trust; refresher training is annual; Code of
-  Conduct and Covenant of Care are annual; the Confidentiality Agreement targets the
-  handles-personal-info flag; the liability release precedes reference checks.
+  `every_3_years` / `adults_only`; refresher training is annual; Code of Conduct and Covenant of
+  Care are annual; the Confidentiality Agreement applies to everyone (BUILD_NOTES §1.14); the
+  liability release precedes reference checks as a **warning**, and refresher training follows
+  orientation training as a **gate** (BUILD_NOTES §1.18).
 - Editing, adding and deactivating are all tested, including that re-seeding **preserves** a
-  church's edits rather than reverting them.
+  church's edits rather than reverting them — dependencies included, which re-seeding used to
+  overwrite.
 - The template is asserted to contain no policy prose, guarding the licensing constraint.
 
 ## 4. Volunteer onboarded end-to-end; compliance status correct at each step
