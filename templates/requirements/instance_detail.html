@@ -13,12 +13,16 @@
   <div class="actions">
     {% if instance.definition.is_crc %}
       <a class="btn btn--primary" href="{% url 'requirements:crc_create' instance.volunteer.pk %}">Record a check</a>
-    {% elif instance.status != "not_applicable" and instance.status != "blocked" %}
+    {% elif instance.can_mark_complete %}
       <a class="btn btn--primary" href="{% url 'requirements:instance_complete' instance.pk %}">
         {% if instance.status == "complete" %}Renew{% else %}Mark complete{% endif %}
       </a>
     {% endif %}
-    <a class="btn" href="{% url 'documents:create' instance.volunteer.pk %}?instance={{ instance.pk }}">Add a document</a>
+    <a class="btn{% if instance.definition.requires_document %} btn--primary{% endif %}"
+       href="{% url 'documents:create' instance.volunteer.pk %}?instance={{ instance.pk }}">Add a document</a>
+    {% if instance.status == "waived" %}
+      <a class="btn" href="{% url 'requirements:instance_reverse_waiver' instance.pk %}">Reverse waiver</a>
+    {% endif %}
   </div>
 </div>
 

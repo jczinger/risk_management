@@ -33,6 +33,7 @@ from .forms import (
     RequirementCompleteForm,
     RequirementDefinitionForm,
     RequirementWaiveForm,
+    WaiverReversalForm,
 )
 from .models import (
     CRCNotClearOutcome,
@@ -49,6 +50,7 @@ from .services import (
     record_crc,
     record_discretionary_override,
     resolve_not_clear,
+    reverse_waiver,
     start_requirement,
     sync_volunteer_requirements,
     waive_requirement,
@@ -235,10 +237,22 @@ def definition_seed(request):
 @login_required
 @require_http_methods(["GET", "POST"])
 def instance_complete(request, pk: int):
-    """Record a requirement as satisfied."""
+    """
+    Record a requirement as satisfied.
+
+    Refused where no screen offers the action, so reaching the URL directly cannot do
+    what the interface declines to. The waiver case is the one that matters: a waiver is
+    already a recorded decision that the requirement is met, with a reason and an audit
+    entry, and completing over the top of it would leave a row that reads complete while
+    still carrying someone's waiver.
+    """
     instance = get_object_or_404(
         RequirementInstance.objects.select_related("volunteer", "definition"), pk=pk
     )
+
+    if not instance.can_mark_complete:
+        messages.error(request, _why_completion_is_refused(instance))
+        return redirect("requirements:instance_detail", pk=instance.pk)
 
     form = RequirementCompleteForm(request.POST or None)
     dependency = _unmet_dependency(instance)
@@ -264,6 +278,32 @@ def instance_complete(request, pk: int):
         request,
         "requirements/instance_complete.html",
         {"form": form, "instance": instance, "dependency": dependency},
+    )
+
+
+def _why_completion_is_refused(instance: RequirementInstance) -> str:
+    """A specific reason, so the admin knows what to do instead."""
+    if instance.definition.is_crc:
+        return (
+            "A criminal record check is completed by recording the check itself, so the "
+            "clearance date and the three-year renewal are captured."
+        )
+    if instance.definition.requires_document:
+        return (
+            f"'{instance.definition.name}' is completed by recording its document — "
+            "that is the evidence behind it. Use 'Add document'."
+        )
+    if instance.status == RequirementStatus.WAIVED:
+        return (
+            f"'{instance.definition.name}' was waived by {instance.waived_by or 'an administrator'}, "
+            "which already satisfies it. To record it as completed instead, use "
+            "'Reverse waiver' first — that keeps both decisions in the audit trail."
+        )
+    if instance.status == RequirementStatus.NOT_APPLICABLE:
+        return f"'{instance.definition.name}' does not apply to this volunteer."
+    return (
+        f"'{instance.definition.name}' is blocked pending the outcome of a criminal "
+        "record check and cannot be marked complete."
     )
 
 
@@ -349,6 +389,55 @@ def instance_waive(request, pk: int):
             return redirect("org:volunteer_detail", pk=instance.volunteer.pk)
 
     return render(request, "requirements/instance_waive.html", {"form": form, "instance": instance})
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def instance_reverse_waiver(request, pk: int):
+    """
+    Undo a waiver, with a mandatory comment.
+
+    A waiver is a judgement and judgements can be wrong. This is deliberately *not* the
+    same kind of thing as lifting a disqualification, which has no route at all — see
+    the note at the top of urls.py.
+    """
+    instance = get_object_or_404(
+        RequirementInstance.objects.select_related("volunteer", "definition"), pk=pk
+    )
+
+    if instance.status != RequirementStatus.WAIVED:
+        messages.error(
+            request,
+            f"'{instance.definition.name}' is not waived, so there is nothing to reverse.",
+        )
+        return redirect("requirements:instance_detail", pk=instance.pk)
+
+    form = WaiverReversalForm(request.POST or None)
+
+    if request.method == "POST" and form.is_valid():
+        try:
+            reverse_waiver(
+                instance,
+                reason=form.cleaned_data["reason"],
+                reversed_by=form.cleaned_data["reversed_by"],
+            )
+        except ValidationError as exc:
+            for error in exc.messages:
+                messages.error(request, error)
+        else:
+            instance.refresh_from_db()
+            messages.success(
+                request,
+                f"The waiver on '{instance.definition.name}' has been reversed. It is "
+                f"now {instance.get_status_display().lower()} and will be chased again.",
+            )
+            return redirect("org:volunteer_detail", pk=instance.volunteer.pk)
+
+    return render(
+        request,
+        "requirements/instance_unwaive.html",
+        {"form": form, "instance": instance},
+    )
 
 
 @login_required

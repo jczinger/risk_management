@@ -130,7 +130,7 @@ work in development without TLS.
 .venv/bin/python -m pytest apps/requirements  # one area
 ```
 
-428 tests, including the `pg_dump` leak check, tenant isolation, shared-hostname routing, the
+480 tests, including the `pg_dump` leak check, tenant isolation, shared-hostname routing, the
 age rules, and a render sweep over every page.
 
 ---

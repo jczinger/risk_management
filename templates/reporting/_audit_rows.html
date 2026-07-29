@@ -16,7 +16,7 @@
             <td class="small nowrap">
               {% if event.action == "disqualified" or event.action == "login_failed" %}
                 <span class="badge badge--danger">{{ event.get_action_display }}</span>
-              {% elif event.action == "override" or event.action == "waive" or event.action == "key_backup" %}
+              {% elif event.action == "override" or event.action == "waive" or event.action == "waiver_reversed" or event.action == "key_backup" %}
                 <span class="badge badge--warn">{{ event.get_action_display }}</span>
               {% else %}
                 {{ event.get_action_display }}

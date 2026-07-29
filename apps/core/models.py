@@ -99,6 +99,9 @@ class AuditAction(models.TextChoices):
     REACTIVATE = "reactivate", "Reactivated"
     STATUS_CHANGE = "status_change", "Status changed"
     WAIVE = "waive", "Waived"
+    # Its own action rather than a generic status change: reversing a waiver is exactly
+    # the thing someone filters the trail for.
+    WAIVER_REVERSED = "waiver_reversed", "Waiver reversed"
     UPLOAD = "upload", "Document uploaded"
     DOWNLOAD = "download", "Document viewed"
     LOGIN = "login", "Signed in"

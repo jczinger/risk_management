@@ -253,6 +253,16 @@ recorded in error, that is a data-integrity incident: it needs a documented deci
 database correction by the operator, and it should leave a written record outside this system
 explaining what happened and why.
 
+**A requirement was waived by mistake.** Fixable. On the volunteer's page the waived row offers
+**Reverse waiver**; it asks for a comment saying what was wrong, clears the waiver, and puts the
+requirement back where it stands — outstanding, or overdue if a date has passed. Both the original
+waiver and the reversal stay in the audit trail, so the history of the decision survives. Filter
+the trail by **Waiver reversed** to see them.
+
+This is deliberately not the same as an automatic disqualification, which cannot be lifted by
+anyone. A waiver is an administrator's judgement; a disqualification is a safeguarding
+determination.
+
 **A church wants a requirement the template does not have.** They add it themselves — the
 requirement engine is fully editable per church, and the `custom` type plus the applies-to flags
 cover everything the policy review deferred.

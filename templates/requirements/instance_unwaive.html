@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% comment %}
+Undo a waiver.
+
+Mirrors instance_waive.html, and warns in the same register. The point of the callout is
+that this is not a tidy-up: the requirement genuinely comes back into play and starts
+being chased, which is easy to miss if you are only trying to correct a mis-click.
+{% endcomment %}
+
+{% block title %}Reverse waiver: {{ instance.definition.name }}{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Reverse the waiver on {{ instance.definition.name }}</h1>
+    <p class="lede">For <a href="{% url 'org:volunteer_detail' instance.volunteer.pk %}">{{ instance.volunteer.display_name }}</a></p>
+  </div>
+</div>
+
+<div class="callout callout--warning">
+  <h3>This puts the requirement back in play</h3>
+  <p>
+    {{ instance.volunteer.display_name }} will owe <strong>{{ instance.definition.name }}</strong>
+    again. It returns to the outstanding list, it will be chased in the reminder emails,
+    and if a deadline has already passed it may show as overdue straight away.
+  </p>
+  <p class="mb0">
+    The existing waiver — recorded by
+    <strong>{{ instance.waived_by|default:"an administrator" }}</strong>
+    {% if instance.waived_on %}on {{ instance.waived_on|date:"j F Y" }}{% endif %} — is
+    cleared from the record. Both it and this reversal stay in the audit trail, so the
+    history of the decision survives even though the requirement no longer shows as waived.
+  </p>
+</div>
+
+<div class="card">
+  <form method="post" novalidate>
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--danger">Reverse this waiver</button>
+      <a class="btn" href="{% url 'org:volunteer_detail' instance.volunteer.pk %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

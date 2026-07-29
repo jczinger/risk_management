@@ -147,6 +147,44 @@ class RequirementWaiveForm(forms.Form):
         return value
 
 
+class WaiverReversalForm(forms.Form):
+    """
+    Undo a waiver. The comment is mandatory and is what the audit trail will show.
+
+    ``reason`` is capped as well as floored. The comment is written into the audit
+    entry's *summary*, because that is the only part of an entry the trail displays —
+    and a summary is 255 characters. Capping it here means an admin's explanation is
+    refused up front rather than silently cut in half after the fact.
+    """
+
+    #: Leaves room for the "Waiver reversed by <name>: " prefix inside a 255-char summary.
+    MAX_REASON = 200
+
+    reason = forms.CharField(
+        label="Why is this waiver being reversed?",
+        widget=forms.Textarea(attrs={"rows": 3}),
+        max_length=MAX_REASON,
+        help_text=(
+            f"Required, up to {MAX_REASON} characters so it appears in full in the "
+            "audit trail. Say what was wrong with the waiver."
+        ),
+    )
+    reversed_by = forms.CharField(
+        label="Authorised by",
+        max_length=150,
+        help_text="The leader authorising the reversal.",
+    )
+
+    def clean_reason(self):
+        value = (self.cleaned_data["reason"] or "").strip()
+        if len(value) < 10:
+            raise forms.ValidationError(
+                "Please give a fuller reason — this is the record of why a recorded "
+                "decision was undone."
+            )
+        return value
+
+
 class CRCRecordForm(forms.Form):
     """
     Record a criminal record check result.

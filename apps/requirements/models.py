@@ -518,6 +518,39 @@ class RequirementInstance(TimeStampedModel, NoDeleteModel):
         # not_started / in_progress with no deadline yet: outstanding onboarding work.
         return "outstanding"
 
+    @property
+    def can_mark_complete(self) -> bool:
+        """
+        Whether to offer an admin a "mark complete" action on this requirement.
+
+        One rule, in one place, because three different screens offer this action and
+        they had drifted apart.
+
+        Excluded, and why:
+
+        * **Waived.** A waiver *is* the decision that this requirement is satisfied —
+          it counts as satisfied for compliance, and it carries a reason and an audit
+          entry. Offering "mark complete" beside it invites an admin to overwrite a
+          recorded decision by clicking the obvious button.
+        * **Not applicable.** Satisfied by a rule, not by anything an admin does — the
+          under-18 exemption on the criminal record check, for instance.
+        * **Blocked.** Pending the outcome of a criminal record check; the service
+          refuses it outright.
+        * **Needs a document.** Recording the document is what completes it. A separate
+          tick would let the two disagree.
+        * **The criminal record check.** Its own flow owns completion.
+
+        A completed *recurring* requirement is still included: that is the "Renew"
+        action.
+        """
+        if self.definition.is_crc or self.definition.requires_document:
+            return False
+        return self.status not in (
+            RequirementStatus.WAIVED,
+            RequirementStatus.NOT_APPLICABLE,
+            RequirementStatus.BLOCKED,
+        )
+
     def recompute(self, as_of: datetime.date | None = None) -> bool:
         """
         Bring ``status`` in line with the dates. Returns True if anything changed.

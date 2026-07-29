@@ -334,6 +334,96 @@ def waive_requirement(
     return instance
 
 
+def _status_after_reversal(instance: RequirementInstance) -> str:
+    """
+    Where a reversed waiver puts the requirement back.
+
+    Derived from what survived the waiver rather than assumed, so the row ends up
+    reflecting what actually happened: something completed before it was waived returns
+    to complete, something started returns to in progress, anything else to not started.
+    """
+    if instance.completed_on:
+        return RequirementStatus.COMPLETE
+    if instance.started_on:
+        return RequirementStatus.IN_PROGRESS
+    return RequirementStatus.NOT_STARTED
+
+
+@transaction.atomic
+def reverse_waiver(
+    instance: RequirementInstance,
+    *,
+    reason: str,
+    reversed_by: str,
+) -> RequirementInstance:
+    """
+    Undo a waiver, and record why.
+
+    A waiver is a judgement, and judgements can be wrong — someone confuses two
+    volunteers, or mis-clicks. Nothing in the policy makes one permanent: Build Spec
+    §4.1 asks only that a waiver carry a reason and reach the audit trail. That is a
+    different thing from an automatic disqualification or a leadership override, both of
+    which are deliberately immutable and have tests hunting for a way back.
+
+    So this exists, and it leaves a trail of its own. The waiver fields are cleared, so
+    the record does not show waiver details on a requirement that is no longer waived,
+    and the history lives in the audit trail.
+
+    The requirement genuinely returns to play: it becomes outstanding again, the nightly
+    sweep and the reminder digests both start acting on it again, and it may show as
+    overdue straight away.
+
+    One thing is not restored. ``waive_requirement`` nulls ``due_on``/``due_reason`` and
+    they are not recoverable from the row. In practice that is close to harmless — the
+    criminal record check is the main user of hard deadlines and cannot be waived at all
+    — so this does not carry a shadow copy around for it.
+    """
+    if instance.status != RequirementStatus.WAIVED:
+        raise ValidationError("This requirement is not waived, so there is nothing to reverse.")
+    if not (reason or "").strip():
+        raise ValidationError({"reason": "Say why this waiver is being reversed."})
+
+    before = _snapshot(instance)
+    cleared = {
+        "waived_by": instance.waived_by,
+        "waived_on": str(instance.waived_on or ""),
+        "waived_reason": instance.waived_reason,
+    }
+
+    instance.status = _status_after_reversal(instance)
+    instance.waived_reason = ""
+    instance.waived_by = ""
+    instance.waived_on = None
+    instance.save(
+        update_fields=[
+            "status",
+            "waived_reason",
+            "waived_by",
+            "waived_on",
+            "updated_at",
+        ]
+    )
+    # Moves it to overdue if a renewal date passed while it sat waived.
+    instance.recompute()
+
+    audit.record(
+        AuditAction.WAIVER_REVERSED,
+        "RequirementInstance",
+        entity_id=instance.pk,
+        entity_label=f"{instance.volunteer.display_name} — {instance.definition.name}",
+        # The comment goes in the summary, not only the detail. The audit entry's detail
+        # is recorded but not displayed, so a reason kept only there would be invisible
+        # to the very reader it is written for. The form caps the comment so it fits.
+        summary=f"Waiver reversed by {reversed_by}: {reason}"[:255],
+        detail={
+            "reason": reason,
+            "cleared_waiver": cleared,
+            "changed": _diff(before, _snapshot(instance)),
+        },
+    )
+    return instance
+
+
 # ---------------------------------------------------------------------------
 # Criminal record checks
 # ---------------------------------------------------------------------------

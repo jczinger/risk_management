@@ -12,6 +12,7 @@ import datetime
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
+from apps.core.models import AuditAction
 from apps.core.tests.base import TenantTestCase
 from apps.org.models import ScreeningBlock
 from apps.requirements.models import (
@@ -23,14 +24,31 @@ from apps.requirements.models import (
     RequirementType,
     add_months_to,
 )
+from apps.requirements.forms import WaiverReversalForm
 from apps.requirements.seed import SEED_TEMPLATE, seed_default_template
 from apps.requirements.services import (
     mark_requirement_complete,
     onboarding_window_breached,
     recompute_all_statuses,
+    reverse_waiver,
     sync_volunteer_requirements,
     waive_requirement,
 )
+
+
+def extract_row(html: str, instance) -> str:
+    """
+    The markup for one requirement's row on the volunteer page.
+
+    Bounded by the *next* row rather than by a character count. A fixed-width slice
+    overruns into the following requirement, so an assertion about which buttons a row
+    offers ends up reading its neighbour's — which is exactly how a real bug hid.
+    """
+    marker = f'id="req-{instance.pk}"'
+    assert marker in html, f"no row rendered for requirement {instance.pk}"
+    start = html.index(marker)
+    following = html.find('id="req-', start + len(marker))
+    return html[start:following] if following != -1 else html[start:]
 
 
 class AddMonthsTests(TenantTestCase):
@@ -614,12 +632,8 @@ class RequirementRowActionTests(TenantTestCase):
         return response.content.decode()
 
     def row_for(self, instance) -> str:
-        """Just the markup for one requirement's row."""
-        html = self.volunteer_page()
-        marker = f'id="req-{instance.pk}"'
-        self.assertIn(marker, html)
-        start = html.index(marker)
-        return html[start : start + 1600]
+        """Just the markup for one requirement's row, and nothing of the next one."""
+        return extract_row(self.volunteer_page(), instance)
 
     def test_a_document_backed_requirement_offers_no_mark_complete(self):
         row = self.row_for(self.instance_for("Confidentiality Agreement"))
@@ -722,3 +736,364 @@ class MarkInProgressTests(TenantTestCase):
 
     def test_a_get_is_refused(self):
         self.assertEqual(self.client.get(self.url()).status_code, 405)
+
+
+class WaivedIsAlreadySatisfiedTests(TenantTestCase):
+    """
+    A waiver is the decision that a requirement is met.
+
+    It counts as satisfied for compliance and it carries a reason and an audit entry, so
+    "mark complete" must not sit beside it — clicking the obvious button should never
+    overwrite a recorded decision.
+    """
+
+    def setUp(self):
+        super().setUp()
+        seed_default_template()
+        self.volunteer = self.make_volunteer(age=40)
+        self.assign(self.volunteer, self.make_role())
+        sync_volunteer_requirements(self.volunteer)
+        self.client = self.signed_in_client()
+
+        # The waiting period needs no document, so before this change it kept the
+        # button even once waived — which is exactly what was reported.
+        self.instance = self.volunteer.requirement_instances.get(
+            definition__name="Waiting period — 6 months regular attendance"
+        )
+        waive_requirement(
+            self.instance, reason="Attending this church for seven years", waived_by="Pat Lee"
+        )
+        self.instance.refresh_from_db()
+
+    def complete_url(self):
+        from django.urls import reverse
+
+        return reverse("requirements:instance_complete", args=[self.instance.pk])
+
+    def test_a_waived_requirement_offers_no_completion(self):
+        self.assertFalse(self.instance.can_mark_complete)
+
+    def test_the_volunteer_page_does_not_offer_it(self):
+        from django.urls import reverse
+
+        html = self.client.get(
+            reverse("org:volunteer_detail", args=[self.volunteer.pk])
+        ).content.decode()
+
+        row = extract_row(html, self.instance)
+        self.assertIn("Waived", row)
+        self.assertNotIn("Mark complete", row)
+
+    def test_the_requirement_page_does_not_offer_it(self):
+        from django.urls import reverse
+
+        response = self.client.get(
+            reverse("requirements:instance_detail", args=[self.instance.pk])
+        )
+        self.assertNotContains(response, "Mark complete")
+
+    def test_reaching_the_url_directly_is_refused(self):
+        """The interface hides it; the view must decline it too."""
+        response = self.client.get(self.complete_url())
+        self.assertEqual(response.status_code, 302)
+
+        response = self.client.post(
+            self.complete_url(), {"completed_on": timezone.localdate().isoformat(), "notes": ""}
+        )
+        self.assertEqual(response.status_code, 302)
+
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.WAIVED)
+        self.assertIn("seven years", self.instance.waived_reason)
+
+    def test_the_refusal_explains_itself(self):
+        response = self.client.get(self.complete_url(), follow=True)
+        body = response.content.decode()
+
+        self.assertIn("waived by Pat Lee", body)
+
+    def test_a_document_backed_requirement_is_refused_with_its_own_reason(self):
+        from django.urls import reverse
+
+        confidentiality = self.volunteer.requirement_instances.get(
+            definition__name="Confidentiality Agreement"
+        )
+        response = self.client.get(
+            reverse("requirements:instance_complete", args=[confidentiality.pk]), follow=True
+        )
+
+        self.assertIn("Add document", response.content.decode())
+
+    def test_a_waiver_still_counts_as_satisfied(self):
+        """The premise behind hiding the button, asserted directly."""
+        self.assertIn(RequirementStatus.WAIVED, RequirementStatus.satisfied_values())
+        self.assertEqual(self.instance.bucket, "satisfied")
+
+
+class WaiverReversalTests(TenantTestCase):
+    """
+    Undoing a waiver.
+
+    Nothing in the policy makes a waiver permanent — Build Spec §4.1 asks only that it
+    carry a reason and reach the audit trail — and a waiver is a judgement, which can be
+    wrong. Reversing one is therefore allowed, takes a comment, and appends its own
+    entry. That is a different thing from lifting a disqualification, which has no route
+    at all; test_crc.py hunts for one.
+    """
+
+    def setUp(self):
+        super().setUp()
+        seed_default_template()
+        self.role = self.make_role(name="Teacher")
+        self.volunteer = self.make_volunteer(age=40)
+        self.assign(self.volunteer, self.role)
+        sync_volunteer_requirements(self.volunteer)
+
+        self.instance = self.volunteer.requirement_instances.get(
+            definition__requirement_type=RequirementType.INTERVIEW
+        )
+        waive_requirement(
+            self.instance, reason="Interviewed at the district office", waived_by="Pat Lee"
+        )
+        self.instance.refresh_from_db()
+
+    # -- Service ----------------------------------------------------------
+
+    def test_reversing_returns_it_to_not_started(self):
+        reverse_waiver(self.instance, reason="Waived the wrong volunteer", reversed_by="Sam")
+
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.NOT_STARTED)
+
+    def test_reversing_clears_the_waiver_from_the_record(self):
+        """A row that is not waived must not still show waiver details."""
+        reverse_waiver(self.instance, reason="Waived the wrong volunteer", reversed_by="Sam")
+
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.waived_reason, "")
+        self.assertEqual(self.instance.waived_by, "")
+        self.assertIsNone(self.instance.waived_on)
+
+    def test_something_started_before_the_waiver_returns_to_in_progress(self):
+        self.instance.started_on = timezone.localdate() - datetime.timedelta(days=20)
+        self.instance.save(update_fields=["started_on"])
+
+        reverse_waiver(self.instance, reason="Waived by mistake entirely", reversed_by="Sam")
+
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.IN_PROGRESS)
+
+    def test_something_completed_before_the_waiver_returns_to_complete(self):
+        self.instance.completed_on = timezone.localdate() - datetime.timedelta(days=10)
+        self.instance.save(update_fields=["completed_on"])
+
+        reverse_waiver(self.instance, reason="Waived by mistake entirely", reversed_by="Sam")
+
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.COMPLETE)
+
+    def test_a_completion_that_expired_while_waived_comes_back_overdue(self):
+        """recompute() runs after the reversal, so the row reflects today."""
+        self.instance.completed_on = timezone.localdate() - datetime.timedelta(days=400)
+        self.instance.expires_on = timezone.localdate() - datetime.timedelta(days=35)
+        self.instance.save(update_fields=["completed_on", "expires_on"])
+
+        reverse_waiver(self.instance, reason="Waived by mistake entirely", reversed_by="Sam")
+
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.OVERDUE)
+
+    def test_a_reason_is_required(self):
+        for empty in ("", "   "):
+            with self.subTest(reason=empty), self.assertRaises(ValidationError):
+                reverse_waiver(self.instance, reason=empty, reversed_by="Sam")
+
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.WAIVED)
+
+    def test_something_that_is_not_waived_cannot_be_reversed(self):
+        other = self.volunteer.requirement_instances.exclude(pk=self.instance.pk).first()
+
+        with self.assertRaises(ValidationError):
+            reverse_waiver(other, reason="Nothing to undo here", reversed_by="Sam")
+
+    # -- Audit ------------------------------------------------------------
+
+    def test_the_comment_is_visible_in_the_audit_summary(self):
+        """
+        The summary, not just the detail.
+
+        An audit entry's detail is recorded but not displayed, so a reason kept only
+        there would be invisible to the reader it is written for.
+        """
+        from apps.core.models import AuditEvent
+
+        reverse_waiver(
+            self.instance, reason="Confused two volunteers named Joe", reversed_by="Sam Lee"
+        )
+
+        event = AuditEvent.objects.filter(action=AuditAction.WAIVER_REVERSED).get()
+        self.assertIn("Confused two volunteers named Joe", event.summary)
+        self.assertIn("Sam Lee", event.summary)
+
+    def test_the_comment_fits_the_summary_whole(self):
+        """The form's cap exists so nothing is silently truncated. Prove the cap works."""
+        from apps.core.models import AuditEvent
+
+        reason = "x" * WaiverReversalForm.MAX_REASON
+        reverse_waiver(self.instance, reason=reason, reversed_by="Sam")
+
+        event = AuditEvent.objects.filter(action=AuditAction.WAIVER_REVERSED).get()
+        self.assertLessEqual(len(event.summary), 255)
+        self.assertIn(reason, event.summary)
+
+    def test_the_original_waiver_entry_is_left_alone(self):
+        """Append, never amend — the trail is append-only."""
+        from apps.core.models import AuditEvent
+
+        original = AuditEvent.objects.filter(action=AuditAction.WAIVE).get()
+
+        reverse_waiver(self.instance, reason="Waived the wrong volunteer", reversed_by="Sam")
+
+        original.refresh_from_db()
+        self.assertEqual(original.summary, "Waived by Pat Lee")
+        self.assertEqual(AuditEvent.objects.filter(action=AuditAction.WAIVE).count(), 1)
+        self.assertEqual(AuditEvent.objects.filter(action=AuditAction.WAIVER_REVERSED).count(), 1)
+
+    # -- Knock-on effects -------------------------------------------------
+
+    def test_it_is_chased_again_afterwards(self):
+        """A waived requirement is excluded from reminders; a reversed one is not."""
+        from apps.notifications.services import find_due_reminders
+
+        def chased() -> bool:
+            return any(
+                entry["instance"].pk == self.instance.pk
+                for entry in find_due_reminders(self.tenant)
+            )
+
+        self.instance.due_on = timezone.localdate() - datetime.timedelta(days=1)
+        self.instance.save(update_fields=["due_on"])
+
+        self.assertFalse(chased(), "a waived requirement must not be chased")
+
+        reverse_waiver(self.instance, reason="Waived the wrong volunteer", reversed_by="Sam")
+
+        self.assertTrue(chased(), "a reversed requirement must be chased again")
+
+    def test_it_counts_as_outstanding_again(self):
+        self.assertEqual(self.instance.bucket, "satisfied")
+
+        reverse_waiver(self.instance, reason="Waived the wrong volunteer", reversed_by="Sam")
+
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.bucket, "outstanding")
+        self.assertNotIn(self.instance.status, RequirementStatus.satisfied_values())
+
+    def test_completion_is_offered_again(self):
+        self.assertFalse(self.instance.can_mark_complete)
+
+        reverse_waiver(self.instance, reason="Waived the wrong volunteer", reversed_by="Sam")
+
+        self.instance.refresh_from_db()
+        self.assertTrue(self.instance.can_mark_complete)
+
+
+class WaiverReversalViewTests(TenantTestCase):
+    """The reversal screen, driven through HTTP."""
+
+    def setUp(self):
+        super().setUp()
+        seed_default_template()
+        self.volunteer = self.make_volunteer(age=40)
+        self.assign(self.volunteer, self.make_role())
+        sync_volunteer_requirements(self.volunteer)
+        self.client = self.signed_in_client()
+
+        self.instance = self.volunteer.requirement_instances.get(
+            definition__requirement_type=RequirementType.INTERVIEW
+        )
+        waive_requirement(self.instance, reason="Interviewed elsewhere", waived_by="Pat Lee")
+        self.instance.refresh_from_db()
+
+    def url(self, instance=None):
+        from django.urls import reverse
+
+        return reverse(
+            "requirements:instance_reverse_waiver", args=[(instance or self.instance).pk]
+        )
+
+    def test_a_waived_row_offers_the_reversal(self):
+        from django.urls import reverse
+
+        html = self.client.get(
+            reverse("org:volunteer_detail", args=[self.volunteer.pk])
+        ).content.decode()
+
+        row = extract_row(html, self.instance)
+        self.assertIn("Reverse waiver", row)
+        self.assertNotIn(">Waive<", row)
+
+    def test_a_row_that_is_not_waived_does_not(self):
+        from django.urls import reverse
+
+        other = self.volunteer.requirement_instances.exclude(pk=self.instance.pk).first()
+        html = self.client.get(
+            reverse("org:volunteer_detail", args=[self.volunteer.pk])
+        ).content.decode()
+
+        row = extract_row(html, other)
+        self.assertNotIn("Reverse waiver", row)
+
+    def test_the_page_warns_what_reversing_does(self):
+        response = self.client.get(self.url())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "back in play")
+        self.assertContains(response, "reminder emails")
+        self.assertContains(response, "Pat Lee")
+
+    def test_posting_reverses_it(self):
+        response = self.client.post(
+            self.url(), {"reason": "Waived the wrong volunteer", "reversed_by": "Sam Lee"}
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.NOT_STARTED)
+
+    def test_a_short_comment_is_refused(self):
+        response = self.client.post(self.url(), {"reason": "oops", "reversed_by": "Sam"})
+
+        self.assertEqual(response.status_code, 200)
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.WAIVED)
+
+    def test_a_comment_too_long_for_the_audit_summary_is_refused(self):
+        response = self.client.post(
+            self.url(),
+            {"reason": "x" * (WaiverReversalForm.MAX_REASON + 1), "reversed_by": "Sam"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.status, RequirementStatus.WAIVED)
+
+    def test_the_url_is_refused_for_a_requirement_that_is_not_waived(self):
+        other = self.volunteer.requirement_instances.exclude(pk=self.instance.pk).first()
+
+        response = self.client.get(self.url(other))
+        self.assertEqual(response.status_code, 302)
+
+        response = self.client.post(
+            self.url(other), {"reason": "Trying it on regardless", "reversed_by": "Sam"}
+        )
+        self.assertEqual(response.status_code, 302)
+        # Nothing was written: no reversal entry exists for it.
+        from apps.core.models import AuditEvent
+
+        self.assertFalse(
+            AuditEvent.objects.filter(
+                action=AuditAction.WAIVER_REVERSED, entity_id=str(other.pk)
+            ).exists()
+        )

@@ -122,6 +122,38 @@ mandatory for adults in positions of trust with exactly one exemption (age) and 
 process (Not Clear). A waiver on it would be a back door around the policy's central control,
 so both the form and the service refuse.
 
+**A waiver can be reversed** (added 2026-07-28, at the operator's request). The spec never said
+otherwise — §4.1 asks only that a waiver carry a reason and reach the audit trail. Permanence was
+never a decision; it was an absence, and until recently there was an accidental way round it,
+because "Mark complete" sat next to a waived requirement and would quietly overwrite it. Closing
+that (§1.15) made the gap visible: an admin who waived the wrong volunteer had no way back.
+
+Reversal takes a mandatory comment, clears the waiver from the record, and appends a
+`waiver_reversed` audit entry. The requirement genuinely returns to play — outstanding again,
+chased in reminder digests, possibly overdue immediately — which the confirmation screen says
+plainly, since someone correcting a mis-click may not expect it.
+
+Three details worth knowing:
+
+* **Where it lands.** Derived from what survived the waiver: completed → complete, started → in
+  progress, otherwise not started, then `recompute()` so an expired one shows overdue. Not
+  restored is `due_on`/`due_reason`, which `waive_requirement` nulls unrecoverably — near-harmless
+  in practice, since the criminal record check is the main user of hard deadlines and cannot be
+  waived at all.
+* **The comment goes in the audit *summary*, not just the detail.** After §1.16 removed the detail
+  panel, `summary` is the only part of an entry anyone sees, so a reason recorded only in `detail`
+  would be invisible to the reader it is written for. The form caps the comment at 200 characters
+  so it fits a 255-character summary whole rather than being silently truncated.
+* **Clearing the waiver fields loses the original reason from the interface.** It survives in the
+  original entry's `detail`, which is no longer displayed. That is the accepted consequence of
+  keeping the history in the audit trail rather than on the record.
+
+**This is not a precedent for lifting a disqualification.** A waiver is an administrator's
+judgement, and judgements can be wrong. An automatic disqualification is a safeguarding
+determination, is irreversible by design (§4.3), and `apps/requirements/tests/test_crc.py`
+actively hunts for a route back. The note at the top of `apps/requirements/urls.py` draws the
+distinction so the two are not read as comparable.
+
 ### 1.9 Documents: filenames and integrity
 
 **Choice:** stored files are named `<uuid>.enc`; the original filename is an encrypted column.
@@ -272,7 +304,49 @@ not previously covered acquire the Confidentiality Agreement and the criminal re
 on the next reconcile: the nightly sweep, or `sync_volunteer_requirements` on the next
 edit. Nothing is retroactively marked overdue that was not already due.
 
-### 1.15 Deliberate omissions
+### 1.15 Completion follows the evidence
+
+**Changed 2026-07-27, at the operator's request.** "Mark complete" no longer appears on a
+requirement that has a document behind it, or on one that is already satisfied.
+
+**Why.** Two problems, one cause. A tick sitting next to "Add document" let the two disagree, and
+a requirement reading complete with nothing behind it is precisely what an audit looks for. And a
+*waived* requirement still offered the tick, even though a waiver already satisfies it — clicking
+the obvious button would overwrite a recorded decision.
+
+So recording the document now completes the requirement, in all three storage modes, using the
+document's date and setting the next expiry. The rule lives in one place,
+`RequirementInstance.can_mark_complete`, because three screens offer the action and they had
+drifted apart.
+
+Four cases deliberately do **not** auto-complete: the criminal record check (its own flow owns
+clearance, disqualification and the three-year clock), waived and not-applicable (deliberate
+decisions that a file arriving should not overturn), and blocked. A refused completion never
+loses the document — the document is the primary act and is already saved.
+
+**Not every requirement has a document.** The waiting period, the interview and the two training
+items have none, so they keep the button; removing it everywhere would have left them satisfiable
+only by waiver, putting a waiver on a permanent record for an ordinary interview.
+`test_every_seeded_requirement_can_be_satisfied_somehow` fails if any requirement becomes a dead
+end.
+
+Also here: "Start" became "Mark as in progress" and swaps its own row over htmx. It previously
+redirected to the top of the volunteer's file after every click, which reads as navigation rather
+than a status change.
+
+### 1.16 The audit entry page shows no before/after diff
+
+**Changed 2026-07-27, at the operator's request.** Display only: `AuditEvent.detail` is still
+written on every entry and the trail is still append-only.
+
+The view stopped decrypting it too — with nothing rendering the diff, calling `detail_data` would
+have decrypted personal information into a response for no reason.
+
+**The consequence to design around:** `summary` is now the only part of an audit entry anyone
+sees. Anything a human is meant to read has to go there, within 255 characters — see the waiver
+reversal in §1.8.
+
+### 1.17 Deliberate omissions
 
 Checked against Build Spec §0 ("DO NOT BUILD"). No code exists for: in-app forms or
 e-signature; Markdown role-description editing, versioning or acknowledgement tracking;
@@ -388,7 +462,7 @@ Recorded because each was a real defect, not a style preference.
 
 ## 5. Verification performed
 
-Full detail in `docs/ACCEPTANCE.md`. Summary: 428 automated tests pass, and the Docker Compose
+Full detail in `docs/ACCEPTANCE.md`. Summary: 480 automated tests pass, and the Docker Compose
 stack was brought up from a clean host, provisioned, backed up, destroyed and restored, with the
 restored personal data confirmed readable and still ciphertext at rest.
 

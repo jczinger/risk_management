@@ -55,14 +55,8 @@ Expects: instance, volunteer. Optional: print_view.
         {% endif %}
       {% elif instance.status != "not_applicable" and instance.status != "blocked" %}
 
-        {% comment %}
-        No "Mark complete" where a document is required. Recording the document is what
-        completes it, so a separate tick would only let the two disagree — and a
-        requirement marked complete with nothing behind it is precisely what an audit
-        looks for. The requirements that need no document keep the button, or they could
-        only ever be waived.
-        {% endcomment %}
-        {% if not instance.definition.requires_document %}
+        {# RequirementInstance.can_mark_complete carries the rule; see it for the why. #}
+        {% if instance.can_mark_complete %}
           <a class="btn btn--sm btn--primary" href="{% url 'requirements:instance_complete' instance.pk %}">
             {% if instance.status == "complete" %}Renew{% else %}Mark complete{% endif %}
           </a>
@@ -80,6 +74,8 @@ Expects: instance, volunteer. Optional: print_view.
 
         {% if instance.status != "waived" %}
           <a class="btn btn--sm" href="{% url 'requirements:instance_waive' instance.pk %}">Waive</a>
+        {% else %}
+          <a class="btn btn--sm" href="{% url 'requirements:instance_reverse_waiver' instance.pk %}">Reverse waiver</a>
         {% endif %}
       {% endif %}
 

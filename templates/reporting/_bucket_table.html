@@ -59,8 +59,10 @@
                   {% if not instance.volunteer.is_permanently_disqualified %}
                     <a class="btn btn--sm" href="{% url 'requirements:crc_create' instance.volunteer.pk %}">Record check</a>
                   {% endif %}
-                {% elif instance.status != "blocked" %}
+                {% elif instance.can_mark_complete %}
                   <a class="btn btn--sm" href="{% url 'requirements:instance_complete' instance.pk %}">Complete</a>
+                {% elif instance.definition.requires_document %}
+                  <a class="btn btn--sm" href="{% url 'documents:create' instance.volunteer.pk %}?instance={{ instance.pk }}">Add document</a>
                 {% endif %}
               </td>
             </tr>

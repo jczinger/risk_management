@@ -237,6 +237,12 @@ path to rewriting history — which is the whole point of a trail an insurer mig
 `on_delete=PROTECT` so no cascade can reach a volunteer's history. Permanent retention is a policy
 requirement and a legal one for records involving minors.
 
+**A waiver, by contrast, can be reversed** — and the boundary is deliberate rather than
+accidental. Setting a requirement aside is an administrator's judgement, and judgements can be
+wrong. Reversing one requires a comment, clears the waiver from the record, and appends its own
+audit entry; the original waiver entry is untouched, because the trail is append-only. What
+cannot be undone is everything below.
+
 **Leadership overrides are immutable.** A `DiscretionaryOverride` cannot be edited or deleted once
 written. An override that could be quietly revised afterwards would not be a trail. To change a
 decision, record a new one; the earlier one stays visible.
