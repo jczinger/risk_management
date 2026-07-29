@@ -30,11 +30,8 @@
             <td><strong>{{ admin.get_full_name|default:"—" }}</strong>{% if admin.pk == user.pk %} <span class="badge badge--info">you</span>{% endif %}</td>
             <td class="small">{{ admin.email }}</td>
             <td class="pill-row">
-              {% if admin.has_passkey %}<span class="badge badge--ok">Passkey</span>{% endif %}
-              {% if admin.has_totp %}<span class="badge badge--info">Authenticator</span>{% endif %}
-              {% if not admin.has_passkey and not admin.has_totp %}
-                <span class="badge badge--warn">Not yet set up</span>
-              {% endif %}
+              {% if admin.has_passkey %}<span class="badge badge--ok">Passkey</span>
+              {% else %}<span class="badge badge--warn">No passkey yet</span>{% endif %}
             </td>
             <td class="small nowrap">{{ admin.last_login_at|date:"j M Y, H:i"|default:"Never" }}</td>
             <td>

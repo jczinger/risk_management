@@ -88,7 +88,6 @@ class DumpLeakageTests(TransactionTestCase):
             schema_name=self.SCHEMA,
             domain_name=self.HOSTNAME,
             admin_email=MARKERS["admin_email"],
-            admin_password="TestPassw0rd!2026",
         )
         self.tenant = self.result.tenant
         connection.set_tenant(self.tenant)
@@ -320,12 +319,44 @@ class DumpLeakageTests(TransactionTestCase):
 
         path.unlink(missing_ok=True)
 
-    def test_password_hashes_are_not_reversible(self):
+    def test_no_account_carries_a_usable_password(self):
+        """
+        There are no passwords to leak. Every account holds Django's unusable marker, so
+        the ``password`` column can appear in a dump without being worth anything.
+
+        The marker must still be *distinct per row*: Django derives a session's
+        ``_auth_user_hash`` from this column, and identical values across churches would
+        let one church's session validate as another's user. See
+        apps/accounts/migrations/0002.
+        """
+        from apps.accounts.models import User
+
+        self._seed_sensitive_data()
+
+        with tenant_context(self.tenant):
+            passwords = list(User.objects.values_list("password", flat=True))
+
+        self.assertTrue(passwords)
+        for stored in passwords:
+            self.assertTrue(stored.startswith("!"), stored[:8])
+        self.assertEqual(len(set(passwords)), len(passwords))
+
+    def test_a_live_sign_in_link_is_not_recoverable_from_the_dump(self):
+        """
+        A link is a bearer token for an administrator account. Provisioning mints one,
+        so a dump taken before it is used must not contain anything that works.
+        """
+        from apps.accounts.links import SIGNING_SALT
+        from django.core import signing
+
         self._seed_sensitive_data()
         dump = self._dump()
 
-        # The hash may appear; the password must not, and the scheme must be a real one.
-        self.assertNotIn("TestPassw0rd!2026", dump)
+        secret = signing.loads(
+            self.result.invite_url.rstrip("/").rsplit("/", 1)[-1], salt=SIGNING_SALT
+        )["token"]
+        self.assertNotIn(secret, dump)
+        self.assertNotIn(self.result.invite_url, dump)
 
     def test_the_encryption_key_is_not_recoverable_from_the_dump(self):
         """

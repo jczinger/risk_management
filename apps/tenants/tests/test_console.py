@@ -63,14 +63,29 @@ class ConsoleTestCase(ProvisioningTestCase):
         with schema_context(public):
             self.operator = get_user_model().objects.create_superuser(
                 email="operator@platform.ca",
-                password="OperatorPass!2026",
                 first_name="Platform",
                 last_name="Operator",
             )
+            # Otherwise ForcePasskeyMiddleware redirects every request to enrolment,
+            # which is a different file's subject.
+            self.give_passkey(self.operator)
 
         self.client = Client(HTTP_HOST=PLATFORM_HOST)
         with schema_context(public):
             self.client.force_login(self.operator)
+
+    @staticmethod
+    def give_passkey(user):
+        """A registered passkey, without the WebAuthn ceremony."""
+        import secrets
+
+        from apps.accounts.models import Passkey
+
+        return Passkey.objects.create(
+            user=user,
+            credential_id=secrets.token_urlsafe(24),
+            public_key=b"not-a-real-key",
+        )
 
     def tearDown(self):
         # Keep the shared public-schema fixtures from leaking between tests.
@@ -104,9 +119,8 @@ class AccessControlTests(ConsoleTestCase):
 
     def test_a_non_superuser_in_the_public_schema_is_refused(self):
         with schema_context(get_public_schema_name()):
-            ordinary = get_user_model().objects.create_user(
-                email="ordinary@platform.ca", password="OrdinaryPass!2026"
-            )
+            ordinary = get_user_model().objects.create_user(email="ordinary@platform.ca")
+            self.give_passkey(ordinary)
             client = Client(HTTP_HOST=PLATFORM_HOST)
             client.force_login(ordinary)
 
@@ -130,7 +144,6 @@ class OnboardingThroughTheConsoleTests(ConsoleTestCase):
             "admin_first_name": "Sam",
             "admin_last_name": "Lee",
             "admin_email": "sam@consolechurch.ca",
-            "admin_password": "",
             "seed_template": "on",
         }
         data.update(overrides)
@@ -242,34 +255,15 @@ class OnboardingThroughTheConsoleTests(ConsoleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "reserved")
 
-    # The suite runs with validators off for speed; this restores the production set, because
-    # "a weak temporary password is refused" is a real behaviour worth locking down.
-    @override_settings(
-        AUTH_PASSWORD_VALIDATORS=[
-            {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-             "OPTIONS": {"min_length": 12}},
-            {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
-            {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
-        ]
-    )
-    def test_a_weak_admin_password_is_rejected(self):
-        for weak in ("password", "short", "123456789012"):
-            with self.subTest(password=weak):
-                response = self.client.post(
-                    console_url("tenants:church_create"),
-                    self._form_data(admin_password=weak),
-                )
-                self.assertEqual(response.status_code, 200)
-                self.assertFalse(Tenant.objects.filter(schema_name="consolech").exists())
+    def test_the_form_no_longer_offers_a_password(self):
+        """
+        There is nothing to set. Provisioning mints a single-use link instead, and a
+        stray password field would create an account nobody could sign into with it.
+        """
+        response = self.client.get(console_url("tenants:church_create"))
 
-    def test_the_production_settings_configure_password_validators(self):
-        """Guards the settings themselves, since the test settings deliberately empty them."""
-        from config.settings import base
-
-        names = {v["NAME"].rsplit(".", 1)[-1] for v in base.AUTH_PASSWORD_VALIDATORS}
-        self.assertIn("MinimumLengthValidator", names)
-        self.assertIn("CommonPasswordValidator", names)
-        self.assertIn("NumericPasswordValidator", names)
+        self.assertNotContains(response, 'type="password"')
+        self.assertNotContains(response, "admin_password")
 
     def test_bad_reminder_lead_times_are_rejected(self):
         for value in ("sixty", "60,60", "-5", "400"):
@@ -305,7 +299,6 @@ class ChurchManagementTests(ConsoleTestCase):
             schema_name="managedch",
             domain_name="managedch.testserver",
             admin_email="admin@managed.ca",
-            admin_password="ManagedPass!2026",
         )
         self.church = self.result.tenant
 
@@ -420,7 +413,6 @@ class KeyRestoreTests(ConsoleTestCase):
             schema_name="restorech",
             domain_name="restorech.testserver",
             admin_email="admin@restore.ca",
-            admin_password="RestorePass!2026",
         )
         self.church = self.result.tenant
 
@@ -474,7 +466,6 @@ class KeyBackupGateTests(ConsoleTestCase):
             schema_name="gatech",
             domain_name="gatech.testserver",
             admin_email="admin@gate.ca",
-            admin_password="GatePass!2026",
         )
         self.church = self.result.tenant
 
@@ -482,7 +473,11 @@ class KeyBackupGateTests(ConsoleTestCase):
         with tenant_context(self.church):
             from apps.accounts.models import User
 
-            self.church_client.force_login(User.objects.get())
+            self.church_admin = User.objects.get()
+            # The key-backup gate is what these tests are about; the passkey gate sits
+            # in front of it and would swallow every request otherwise.
+            self.give_passkey(self.church_admin)
+            self.church_client.force_login(self.church_admin)
 
     def test_the_gate_survives_a_browsers_csrf_origin_check(self):
         """
@@ -499,9 +494,7 @@ class KeyBackupGateTests(ConsoleTestCase):
         """
         client = Client(HTTP_HOST="gatech.testserver", enforce_csrf_checks=True)
         with tenant_context(self.church):
-            from apps.accounts.models import User
-
-            client.force_login(User.objects.get())
+            client.force_login(self.church_admin)
 
         page = client.get("/key-backup/")
         token = page.context["csrf_token"]

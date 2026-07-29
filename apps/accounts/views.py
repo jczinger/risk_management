@@ -1,16 +1,21 @@
 """
 Sign-in and account management.
 
-The sign-in page leads with a passkey button and offers the password form behind a
-disclosure — passkeys are the primary method, not an alternative (Build Spec §1).
+There is one way to sign in — a passkey — and one way to get a passkey when you do not
+have one yet: a single-use link, emailed. Nothing here takes a password.
 
 Flows:
 
 * **Passkey:** POST to ``webauthn_authenticate_begin`` → browser ceremony → POST to
-  ``webauthn_authenticate_finish`` → signed in. One step, no second factor needed.
-* **Password:** POST the password form → *not yet signed in*, held in a pending
-  session slot → TOTP step → signed in. An account with a usable password but no
-  confirmed TOTP is sent to enrolment before it can go anywhere else.
+  ``webauthn_authenticate_finish`` → signed in. One step, and no second factor: the
+  authenticator has already proven possession of an unlocked device.
+* **Link:** GET ``link_consume`` with a signed payload → signed in once, and held at
+  passkey enrolment by :class:`~apps.accounts.middleware.ForcePasskeyMiddleware` until
+  a passkey exists. Issued either when an account is created or on request from
+  ``recover_request``.
+
+See :mod:`apps.accounts.links` for how a link carries the church it belongs to, and
+BUILD_NOTES §1.20 for why the password path went away.
 """
 
 from __future__ import annotations
@@ -28,27 +33,18 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
-from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_http_methods, require_POST
 from django_ratelimit.decorators import ratelimit
 from django_ratelimit.exceptions import Ratelimited
 
 from apps.core import audit
 from apps.core.models import AuditAction
-from apps.tenants.routing import clear_tenant_cookie, set_tenant_cookie
+from apps.tenants.routing import clear_tenant_cookie, find_login_targets, set_tenant_cookie
 
-from . import totp as totp_service
+from . import links as link_service
 from . import webauthn_service
-from .forms import (
-    AdminInviteForm,
-    AdminProfileForm,
-    EmailPasswordForm,
-    PasskeyLabelForm,
-    SetPasswordForm,
-    TOTPEnrolForm,
-    TOTPForm,
-)
-from .models import User
+from .forms import AdminInviteForm, AdminProfileForm, PasskeyLabelForm, RecoveryRequestForm
+from .models import LinkPurpose, User
 from .webauthn_service import WebAuthnError
 
 logger = logging.getLogger("vms.accounts")
@@ -119,90 +115,21 @@ def _complete_login(request, user: User, method: str) -> HttpResponse:
 
 
 @never_cache
-@sensitive_post_parameters("password")
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET"])
 def login_view(request):
-    """Passkey-first sign-in, with the password fallback behind a disclosure."""
+    """
+    The sign-in page: a passkey button, and a way to ask for a link.
+
+    There is nothing to POST here. The passkey ceremony runs against the WebAuthn
+    endpoints over fetch, and everything else happens at ``recover_request``.
+    """
     if request.user.is_authenticated:
         return redirect(settings.LOGIN_REDIRECT_URL)
 
-    form = EmailPasswordForm(request)
-    rate_limited = False
-
-    if request.method == "POST":
-        try:
-            rate_limited = _check_login_ratelimit(request)
-        except Ratelimited:
-            rate_limited = True
-
-        if rate_limited:
-            messages.error(
-                request,
-                "Too many sign-in attempts. Wait a few minutes before trying again, "
-                "or sign in with your passkey.",
-            )
-        else:
-            form = EmailPasswordForm(request, request.POST)
-            if form.is_valid():
-                user = form.user
-
-                # Validating the form may have switched schemas to the church this
-                # address belongs to. Start a clean session so it is created *there*
-                # rather than carrying over a public-schema session key.
-                if form.target is not None:
-                    request.session.flush()
-
-                # Password accepted, but the user is NOT logged in yet — the fallback
-                # path requires a second factor (Build Spec §1). The tenant cookie is
-                # still set now, before the second factor: it only selects a schema,
-                # and an unauthenticated session in that schema grants nothing.
-                request.session[totp_service.PENDING_SESSION_KEY] = user.pk
-                request.session[totp_service.PENDING_STARTED_KEY] = timezone.now().isoformat()
-
-                if user.has_totp:
-                    destination = (
-                        f"{reverse('accounts:totp_verify')}?next={_post_login_redirect(request)}"
-                    )
-                else:
-                    # No TOTP yet. Let them in only as far as enrolment, which is
-                    # mandatory before the password path is usable for anything else.
-                    messages.info(
-                        request,
-                        "Before you continue, set up an authenticator app. A password on "
-                        "its own is not enough to protect volunteers' personal information.",
-                    )
-                    destination = reverse("accounts:totp_setup_required")
-
-                return _apply_tenant_cookie(redirect(destination), form.target)
-            else:
-                _audit_failed_login(request, form)
-
-    return render(
-        request,
-        "accounts/login.html",
-        {
-            "form": form,
-            "next": request.GET.get("next", ""),
-            "rate_limited": rate_limited,
-        },
-    )
+    return render(request, "accounts/login.html", {"next": request.GET.get("next", "")})
 
 
-@ratelimit(key="post:email", rate=settings.LOGIN_RATELIMIT, method="POST", block=False)
-@ratelimit(key="ip", rate="30/5m", method="POST", block=False)
-def _check_login_ratelimit(request) -> bool:
-    """
-    Apply the login rate limits.
-
-    Limited per email *and* per IP: the first stops one account being ground down, the
-    second stops one source spraying many accounts. Applied as a helper rather than a
-    decorator on the view so a rate-limited attempt still renders the page with an
-    explanation instead of a bare 403.
-    """
-    return getattr(request, "limited", False)
-
-
-def _audit_failed_login(request, form) -> None:
+def _audit_failed_login(request, reason: str) -> None:
     """
     Record a failed attempt without storing the address that was tried.
 
@@ -210,13 +137,11 @@ def _audit_failed_login(request, form) -> None:
     email into the trail in plaintext-adjacent form; the IP is enough to spot a
     pattern.
     """
-    if not form.errors:
-        return
     audit.record(
         AuditAction.LOGIN_FAILED,
         "User",
         summary="Sign-in attempt failed",
-        detail={"reason": next(iter(form.errors.keys()), "invalid")},
+        detail={"reason": reason},
     )
 
 
@@ -243,10 +168,47 @@ def logout_view(request):
 # ---------------------------------------------------------------------------
 
 
+def _passkey_rate(group, request):
+    """
+    Read the limit per request rather than at import.
+
+    ``rate=settings.X`` freezes the value when the module loads, which quietly defeats
+    both ``override_settings`` in a test and any attempt to retune it without a restart.
+    django-ratelimit accepts a callable for exactly this.
+    """
+    return settings.LOGIN_RATELIMIT
+
+
+def _recovery_rate(group, request):
+    return settings.VMS_RECOVERY_RATELIMIT
+
+
+@ratelimit(key="ip", rate=_passkey_rate, method="POST", block=False)
+def _check_passkey_ratelimit(request) -> bool:
+    """
+    Meter the passkey endpoints per source IP.
+
+    These used to be unlimited, which was defensible while a rate-limited password form
+    stood beside them. They are now the only interactive way in, and a ``finish`` call
+    carrying an unknown credential costs a scan across every church's schema
+    (:func:`apps.tenants.routing.find_passkey_target`) plus a challenge row. Per IP only:
+    a discoverable-credential ceremony sends no address, so there is no account to key a
+    second limit on.
+    """
+    return getattr(request, "limited", False)
+
+
+_RATE_LIMITED_JSON = {
+    "error": "Too many sign-in attempts from this connection. Wait a few minutes and try again."
+}
+
+
 @never_cache
 @require_POST
 def webauthn_authenticate_begin(request):
     """Issue an assertion challenge. No user needed — discoverable credentials."""
+    if _rate_limited(request):
+        return JsonResponse(_RATE_LIMITED_JSON, status=429)
     try:
         options = webauthn_service.begin_authentication(request)
     except WebAuthnError as exc:
@@ -254,10 +216,20 @@ def webauthn_authenticate_begin(request):
     return HttpResponse(options, content_type="application/json")
 
 
+def _rate_limited(request) -> bool:
+    try:
+        return _check_passkey_ratelimit(request)
+    except Ratelimited:
+        return True
+
+
 @never_cache
 @require_POST
 def webauthn_authenticate_finish(request):
     """Verify an assertion and sign the user in."""
+    if _rate_limited(request):
+        return JsonResponse(_RATE_LIMITED_JSON, status=429)
+
     body = request.body.decode("utf-8", errors="replace")
     if not body:
         return JsonResponse({"error": "No passkey response received."}, status=400)
@@ -338,174 +310,161 @@ def passkey_remove(request, pk: int):
 
 
 # ---------------------------------------------------------------------------
-# TOTP
+# Sign-in links
 # ---------------------------------------------------------------------------
 
 
-def _pending_user(request) -> User | None:
-    """The half-authenticated user between the password and TOTP steps."""
-    user_id = request.session.get(totp_service.PENDING_SESSION_KEY)
-    started = request.session.get(totp_service.PENDING_STARTED_KEY)
-    if not user_id or not started:
-        return None
+@never_cache
+@require_http_methods(["GET"])
+def link_consume(request, payload: str):
+    """
+    Spend a sign-in link: sign the holder in once, and send them to enrol a passkey.
+
+    A GET, because this is a URL in an email and there is nothing else it could be.
+    That normally deserves suspicion — a link that changes state can be spent by a
+    scanner in the recipient's own mail chain, and by any prefetcher in between. It is
+    accepted here for the same reason every other product accepts it: the alternative
+    is an interstitial page whose only content is a button, which stops nothing that
+    follows redirects. The exposure is bounded by the link being single-use and
+    short-lived, and by the sign-in it grants leading nowhere except passkey enrolment.
+    """
+    if request.user.is_authenticated:
+        auth_logout(request)
 
     try:
-        age = (timezone.now() - timezone.datetime.fromisoformat(started)).total_seconds()
-    except (TypeError, ValueError):
-        return None
+        user, link = link_service.consume_link(request, payload)
+    except link_service.LinkError as exc:
+        _audit_failed_login(request, "invalid_link")
+        return render(request, "accounts/link_invalid.html", {"reason": str(exc)}, status=400)
 
-    if age > totp_service.PENDING_TIMEOUT_SECONDS:
-        _clear_pending(request)
-        return None
+    # The connection is now bound to the account's own schema. Start a clean session so
+    # it is created *there* rather than carrying over a public-schema session key — the
+    # same reasoning the passkey path relies on.
+    request.session.flush()
 
-    return User.objects.filter(pk=user_id, is_active=True).first()
+    response = _complete_login(request, user, method="sign-in link")
 
+    audit.record(
+        AuditAction.LINK_USED,
+        "User",
+        entity_id=user.pk,
+        entity_label=user.get_full_name() or "administrator",
+        summary=f"{LinkPurpose(link.purpose).label} link used",
+        detail={"purpose": link.purpose},
+    )
 
-def _clear_pending(request) -> None:
-    request.session.pop(totp_service.PENDING_SESSION_KEY, None)
-    request.session.pop(totp_service.PENDING_STARTED_KEY, None)
+    if link.purpose == LinkPurpose.RECOVERY:
+        told = link_service.notify_recovery_used(user)
+        if told:
+            messages.info(
+                request,
+                f"The other {'administrator' if told == 1 else 'administrators'} at your "
+                "church have been told that an account was recovered.",
+            )
+
+    if not user.has_passkey:
+        messages.info(
+            request,
+            "You are signed in for now. Set up a passkey to finish — it is how you will "
+            "sign in from here on.",
+        )
+
+    return _apply_tenant_cookie(response, getattr(request, "vms_login_target", None))
 
 
 @never_cache
 @require_http_methods(["GET", "POST"])
-def totp_verify(request):
-    """The second-factor step. Reached only with a valid pending session."""
-    user = _pending_user(request)
-    if user is None:
-        messages.error(request, "That sign-in attempt timed out. Please start again.")
-        return redirect("accounts:login")
+def recover_request(request):
+    """
+    Send a fresh sign-in link to whoever owns an address.
 
-    form = TOTPForm(request.POST or None)
+    The response is identical whether or not the address exists. That is the same
+    enumeration guarantee the old password form carried, and it matters more now: this
+    form is reachable by anyone, and a distinct "no such account" would map out who
+    administers which church.
+    """
+    form = RecoveryRequestForm(request.POST or None)
+    rate_limited = False
 
-    if request.method == "POST" and form.is_valid():
-        if totp_service.verify_code(user.totp_secret, form.cleaned_data["code"]):
-            _clear_pending(request)
-            return _complete_login(request, user, method="password + authenticator app")
-        form.add_error("code", "That code was not accepted. Try the current code.")
-        audit.record(
-            AuditAction.LOGIN_FAILED,
-            "User",
-            entity_id=user.pk,
-            summary="Authenticator code rejected",
-        )
+    if request.method == "POST":
+        try:
+            rate_limited = _check_recovery_ratelimit(request)
+        except Ratelimited:
+            rate_limited = True
 
-    return render(request, "accounts/totp_verify.html", {"form": form})
+        if not rate_limited and form.is_valid():
+            _send_recovery_links(form.cleaned_data["email"])
+            return render(request, "accounts/recover_sent.html")
+
+        if rate_limited:
+            messages.error(
+                request,
+                "Too many requests. Wait a while before asking for another link — check "
+                "your inbox and spam folder in the meantime.",
+            )
+
+    return render(
+        request, "accounts/recover.html", {"form": form, "rate_limited": rate_limited}
+    )
 
 
+@ratelimit(key="post:email", rate=_recovery_rate, method="POST", block=False)
+@ratelimit(key="ip", rate=_recovery_rate, method="POST", block=False)
+def _check_recovery_ratelimit(request) -> bool:
+    """
+    Limit recovery requests per address and per source IP.
+
+    Tighter than the passkey limit because each request that lands sends real mail to a
+    real person; without the per-address half this form is a way to bury somebody's
+    inbox, and without the per-IP half it is a way to bury several.
+    """
+    return getattr(request, "limited", False)
+
+
+def _send_recovery_links(email: str) -> None:
+    """
+    Issue one link per schema holding this address.
+
+    Somebody who administers two churches gets two emails, each naming its church. That
+    is better than the password form managed: it resolved a duplicated address to the
+    first church alphabetically and logged a warning, which left the second account
+    quietly unreachable.
+    """
+    from django_tenants.utils import schema_context
+
+    targets = find_login_targets(email)
+    if not targets:
+        logger.info("Recovery requested for an address with no account")
+        return
+
+    for target in targets:
+        # One church failing — an unreadable key, a mail outage — must not stop the
+        # others. Every branch below still renders the same page to the visitor, so a
+        # failure here is invisible to them by design; the log is where it surfaces.
+        try:
+            with schema_context(target.schema_name):
+                user = User.objects.filter(pk=target.user_pk, is_active=True).first()
+                if user is None:
+                    continue
+                _, url = link_service.issue_link(user, LinkPurpose.RECOVERY)
+                link_service.send_link(user, url, LinkPurpose.RECOVERY, church_name=target.label)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not issue a recovery link in schema %s", target.schema_name)
+
+
+@login_required
 @never_cache
-@require_http_methods(["GET", "POST"])
-def totp_setup_required(request):
+def passkey_required(request):
     """
-    Mandatory TOTP enrolment for a password account that has none.
+    The enrolment wall. Everything else redirects here until a passkey exists.
 
-    Reached from the password step, so ``request.user`` is still anonymous here — the
-    pending session slot identifies who is enrolling.
+    Reached only through :class:`~apps.accounts.middleware.ForcePasskeyMiddleware`, or
+    directly by someone who already has one — hence the redirect out.
     """
-    user = _pending_user(request)
-    if user is None:
-        messages.error(request, "That sign-in attempt timed out. Please start again.")
-        return redirect("accounts:login")
+    if request.user.has_passkey:
+        return redirect(settings.LOGIN_REDIRECT_URL)
 
-    secret = request.session.get("vms_totp_new_secret")
-    if not secret:
-        secret = totp_service.generate_secret()
-        request.session["vms_totp_new_secret"] = secret
-
-    form = TOTPEnrolForm(request.POST or None)
-
-    if request.method == "POST" and form.is_valid():
-        try:
-            totp_service.confirm_enrolment(user, secret, form.cleaned_data["code"])
-        except ValidationError as exc:
-            form.add_error("code", exc.messages[0])
-        else:
-            request.session.pop("vms_totp_new_secret", None)
-            _clear_pending(request)
-            audit.record(
-                AuditAction.UPDATE,
-                "User",
-                entity_id=user.pk,
-                entity_label=user.get_full_name() or "administrator",
-                summary="Authenticator app enrolled",
-                actor=audit.Actor(user_id=user.pk, display=user.get_full_name() or "administrator"),
-            )
-            messages.success(request, "Authenticator app set up. You are signed in.")
-            return _complete_login(request, user, method="password + authenticator app")
-
-    uri = totp_service.provisioning_uri(user, secret)
-    return render(
-        request,
-        "accounts/totp_setup.html",
-        {
-            "form": form,
-            "secret": secret,
-            "qr": totp_service.qr_data_uri(uri),
-            "mandatory": True,
-        },
-    )
-
-
-@login_required
-@require_http_methods(["GET", "POST"])
-def totp_setup(request):
-    """Voluntary TOTP enrolment from account settings."""
-    if request.user.has_totp:
-        messages.info(request, "You already have an authenticator app set up.")
-        return redirect("accounts:security")
-
-    secret = request.session.get("vms_totp_new_secret")
-    if not secret:
-        secret = totp_service.generate_secret()
-        request.session["vms_totp_new_secret"] = secret
-
-    form = TOTPEnrolForm(request.POST or None)
-
-    if request.method == "POST" and form.is_valid():
-        try:
-            totp_service.confirm_enrolment(request.user, secret, form.cleaned_data["code"])
-        except ValidationError as exc:
-            form.add_error("code", exc.messages[0])
-        else:
-            request.session.pop("vms_totp_new_secret", None)
-            audit.record(
-                AuditAction.UPDATE,
-                "User",
-                entity_id=request.user.pk,
-                entity_label=request.user.get_full_name() or "administrator",
-                summary="Authenticator app enrolled",
-            )
-            messages.success(request, "Authenticator app set up.")
-            return redirect("accounts:security")
-
-    uri = totp_service.provisioning_uri(request.user, secret)
-    return render(
-        request,
-        "accounts/totp_setup.html",
-        {
-            "form": form,
-            "secret": secret,
-            "qr": totp_service.qr_data_uri(uri),
-            "mandatory": False,
-        },
-    )
-
-
-@login_required
-@require_POST
-def totp_disable(request):
-    try:
-        totp_service.disable_totp(request.user)
-    except ValidationError as exc:
-        messages.error(request, "; ".join(exc.messages))
-    else:
-        audit.record(
-            AuditAction.UPDATE,
-            "User",
-            entity_id=request.user.pk,
-            summary="Authenticator app removed",
-        )
-        messages.success(request, "Authenticator app removed.")
-    return redirect("accounts:security")
+    return render(request, "accounts/passkey_required.html", {"label_form": PasskeyLabelForm()})
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +474,7 @@ def totp_disable(request):
 
 @login_required
 def security(request):
-    """Passkeys, authenticator app, and password — one page."""
+    """Passkeys — the whole of a person's sign-in setup, on one page."""
     return render(
         request,
         "accounts/security.html",
@@ -524,38 +483,6 @@ def security(request):
             "label_form": PasskeyLabelForm(),
         },
     )
-
-
-@login_required
-@sensitive_post_parameters("new_password1", "new_password2")
-@require_http_methods(["GET", "POST"])
-def password_change(request):
-    form = SetPasswordForm(request.user, request.POST or None)
-
-    if request.method == "POST" and form.is_valid():
-        form.save()
-        # Changing the password rotates the session hash, so re-establish the session
-        # rather than signing the user out mid-visit.
-        from django.contrib.auth import update_session_auth_hash
-
-        update_session_auth_hash(request, request.user)
-        audit.record(
-            AuditAction.UPDATE,
-            "User",
-            entity_id=request.user.pk,
-            summary="Password changed",
-        )
-        if not request.user.has_totp:
-            messages.warning(
-                request,
-                "Password set. You still need an authenticator app before the password "
-                "route can be used to sign in.",
-            )
-            return redirect("accounts:totp_setup")
-        messages.success(request, "Password changed.")
-        return redirect("accounts:security")
-
-    return render(request, "accounts/password_change.html", {"form": form})
 
 
 @login_required
@@ -603,14 +530,20 @@ def admin_list(request):
 @login_required
 @require_http_methods(["GET", "POST"])
 def admin_invite(request):
-    """Add another screening admin to this church."""
+    """
+    Add another screening admin to this church, and mint their first sign-in link.
+
+    The link is shown to the inviting admin as well as emailed. That is not only a
+    workaround for email not being configured yet: a church may well want to hand it
+    over in person, and an invite that silently fails to arrive is worse than one the
+    sender can see.
+    """
     form = AdminInviteForm(request.POST or None)
 
     if request.method == "POST" and form.is_valid():
         data = form.cleaned_data
         user = User.objects.create_user(
             email=data["email"],
-            password=data["password"] or None,
             first_name=data["first_name"],
             last_name=data["last_name"],
         )
@@ -620,24 +553,29 @@ def admin_invite(request):
             entity_id=user.pk,
             entity_label=user.get_full_name(),
             summary="Screening administrator added",
-            detail={"passwordless": not data["password"]},
         )
-        if data["password"]:
-            messages.success(
-                request,
-                f"{user.get_full_name()} can now sign in. They will be required to set "
-                "up an authenticator app on first sign-in.",
-            )
-        else:
-            messages.success(
-                request,
-                f"{user.get_full_name()} has been added as a passkey-only account. They "
-                "will need to register a passkey — ask another admin to help them do "
-                "that on a trusted device.",
-            )
-        return redirect("accounts:admin_list")
+
+        _, url = link_service.issue_link(user, LinkPurpose.INVITE, issued_by=request.user)
+        emailed = link_service.send_link(
+            user, url, LinkPurpose.INVITE, church_name=_church_name(request)
+        )
+
+        return render(
+            request,
+            "accounts/invite_sent.html",
+            {
+                "new_admin": user,
+                "url": url,
+                "emailed": emailed,
+                "expires_in": link_service.describe_lifetime(LinkPurpose.INVITE),
+            },
+        )
 
     return render(request, "accounts/admin_invite.html", {"form": form})
+
+
+def _church_name(request) -> str:
+    return getattr(getattr(request, "tenant", None), "name", "") or ""
 
 
 @login_required

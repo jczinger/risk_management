@@ -435,6 +435,80 @@ a future `RoleDescriptionVersion` can hang off; `Document` already models supers
 deferred (renewal application form, child-welfare-check consent, Volunteer Driver Agreement,
 Computer Policy Agreement, Offenders Covenant) without a code change.
 
+### 1.20 Passkeys only, with an emailed link as the way in and back
+
+**This departs from a fixed decision in the spec**, at the product owner's direction (29 July
+2026). Build Spec §1 lists auth as "Passkeys (WebAuthn) primary; password (Argon2) + TOTP
+fallback"; PRD §6 repeats it; Build Spec §10 has it as an acceptance criterion. All three are
+annotated to point here rather than rewritten, and `docs/ACCEPTANCE.md` §2 is marked superseded
+rather than deleted, so the change is visible as a change.
+
+What replaced it:
+
+* A passkey is the only way to sign in.
+* A **single-use link** covers the two moments a passkey does not exist yet — the first sign-in
+  after an account is created, and recovery after a lost passkey or a replaced device.
+* Enrolment is compulsory: `ForcePasskeyMiddleware` holds an account with no passkey at the
+  enrolment page until it has one.
+
+Password and TOTP were **removed, not disabled**: `totp.py` and `tenant_login.py` deleted, the
+views, forms, URLs, templates and settings with them, and `pyotp`, `qrcode` and `argon2-cffi`
+dropped from requirements. A disabled code path is one someone re-enables by accident.
+
+**Why the link carries its schema, signed.** Sign-in happens in `public`, before anything knows
+which church the visitor belongs to. A passkey has no choice but to scan every schema for its
+credential id (`find_passkey_target`), but a link is *issued* by us, so the answer is known at
+that moment and travels in the payload. It is signed for the same reason the tenant cookie is:
+consuming a link calls `bind_tenant()` on that schema name, and nothing attacker-chosen may reach
+that call.
+
+**Why the expiry is recorded twice.** `signing.loads(max_age=...)` enforces one, and
+`LoginLink.expires_at` the other. The signer necessarily gets the *invite* window even for a
+recovery link, because the purpose sits inside the payload and cannot be read until the signature
+has already been checked — so a recovery link inside its seven days but past its thirty minutes is
+caught only by the row. Both guards are load-bearing; there is a test for each.
+
+**Why enrolment is a middleware.** A redirect out of the link view would be escaped by typing any
+other URL, and by then the link is spent. It is ordered *before* `ForceKeyBackupMiddleware`: a new
+church's first admin trips both on the same request, and the passkey has to come first.
+
+**A defect this nearly shipped with.** The passwordless migration wants to blank every stored
+hash, and the obvious way to write that is
+`User.objects.all().update(password=make_password(None))` — which writes **one** generated value
+to every row. Django derives a session's `_auth_user_hash` from that column, and the session table
+is shared across schemas (`django.contrib.sessions` is in SHARED_APPS only, so there is one
+`django_session` in `public`). Identical passwords mean identical session hashes, and a session
+for user 5 at one church would then validate as user 5 at another — precisely the hole the signed
+tenant cookie exists not to open. The migration therefore updates row by row, and
+`PasswordRemovalTests.test_the_migration_gives_every_row_a_distinct_marker` calls the migration
+function directly and fails if it is ever shortened. Chasing this also turned up that
+`apps/tenants/routing.py` had been explaining the isolation guarantee incorrectly — it claimed
+sessions live in each church's schema, which they do not. That docstring and `docs/SECURITY.md`
+now describe what actually enforces it.
+
+**The accepted cost.** Whoever controls an administrator's mailbox controls the account. There is
+no password to also need and no second factor to also hold. That is inherent in what was asked
+for and is the usual arrangement for products of this kind, but it is a real reduction from "a
+stolen password is useless without a TOTP device". Three things bound it: a recovery link lives
+thirty minutes and works once; using one is written to the audit trail as its own action; and
+using one emails **every other administrator at that church**. Nothing here can stop a mailbox
+takeover — being noticed the same morning is the realistic defence, which is why the notification
+is not optional.
+
+**Links are shown on screen as well as emailed**, wherever an account is created. Not merely
+because email is not configured yet: a church may want to hand one over in person, and an invite
+that silently fails to arrive is worse than one the sender can see. `manage.py issue_magic_link`
+is the operator's break-glass, and needs shell access to the host — a stronger control than the
+password it replaces.
+
+**Rate limits changed.** The WebAuthn endpoints had none, which was defensible while a
+rate-limited password form stood beside them. They are now the only interactive way in, and a
+`finish` call with an unknown credential costs a scan across every schema, so both halves are
+metered per IP. The recovery form is metered more tightly still — per address *and* per IP —
+because each request that lands sends real mail to a real person. The rates are read through a
+callable rather than `rate=settings.X`, which freezes at import and quietly defeats both
+`override_settings` and any retune without a restart.
+
 ---
 
 ## 2. Where the spec needed a correction to work
@@ -537,7 +611,7 @@ Recorded because each was a real defect, not a style preference.
 
 ## 5. Verification performed
 
-Full detail in `docs/ACCEPTANCE.md`. Summary: 519 automated tests pass, and the Docker Compose
+Full detail in `docs/ACCEPTANCE.md`. Summary: 545 automated tests pass, and the Docker Compose
 stack was brought up from a clean host, provisioned, backed up, destroyed and restored, with the
 restored personal data confirmed readable and still ciphertext at rest.
 

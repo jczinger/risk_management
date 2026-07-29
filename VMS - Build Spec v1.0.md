@@ -20,7 +20,7 @@ Build and deploy **Stage 1** of a multi-tenant **Volunteer Management System (VM
 | Database | PostgreSQL 16, **schema-per-tenant via `django-tenants`** |
 | UI | Server-rendered Django templates + **HTMX** (minimal JS, no SPA framework) |
 | Background jobs | Celery worker + Celery beat, Redis broker |
-| Auth | Passkeys (WebAuthn) primary; password (Argon2) + TOTP fallback |
+| Auth | Passkeys (WebAuthn) primary; password (Argon2) + TOTP fallback — **amended 2026-07-29: passkeys only, with a single-use emailed link for first sign-in and recovery. Password and TOTP removed. See BUILD_NOTES.md §1.20.** |
 | Email | Azure Communication Services Email (Canada geography) via SMTP relay `smtp.azurecomm.net:587`, behind a provider abstraction (swappable interface; console backend for dev) |
 | Deployment | **Docker Compose**: `web` (gunicorn), `worker`, `beat`, `redis`, `db` (Postgres 16 with named volume). One HTTP port exposed to the host; SSL terminated upstream by Nginx Proxy Manager (not part of this stack) |
 | Config | All secrets/config via environment variables (`.env`, with a committed `.env.example`) |
@@ -151,7 +151,7 @@ Uploads accepted: PDF and common images. Virus-scan hook optional; size limit en
 ## 10. Acceptance criteria (Stage 1 is done when all pass)
 
 - [ ] Two tenants provisioned; data provably isolated (cross-schema access test fails).
-- [ ] Admin logs in with a passkey; fallback password+TOTP works; passwordless-only account possible.
+- [ ] Admin logs in with a passkey; fallback password+TOTP works; passwordless-only account possible. *(Amended 2026-07-29 — see BUILD_NOTES.md §1.20 and docs/ACCEPTANCE.md §2.)*
 - [ ] New tenant gets the 14-item seed template; admin can edit, add, deactivate requirements.
 - [ ] Volunteer onboarded end-to-end; compliance status correct at each step.
 - [ ] Under-18 volunteer: CRC auto not_applicable; simulated turn-18 activates CRC with 3-month deadline.

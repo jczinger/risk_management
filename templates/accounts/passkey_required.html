@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% load static %}
+{% comment %}
+The enrolment wall. ForcePasskeyMiddleware redirects every other page here until a
+passkey exists, so this page has to be able to stand alone — hence no nav, and a visible
+way to sign out for anyone who has arrived on a device that cannot do this.
+{% endcomment %}
+
+{% block title %}Set up your passkey{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+{% block nav %}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Set up your passkey</h1>
+    <p class="lede">One step, and then you are in for good</p>
+  </div>
+</div>
+
+<div class="card">
+  <p>
+    The link that brought you here has now been used up. A passkey is how you will sign
+    in from now on — your fingerprint, your face, or your device PIN. Nothing to
+    remember, and nothing that can be phished out of you.
+  </p>
+
+  <div class="field">
+    <label for="passkey-label">Name this device</label>
+    <input type="text" id="passkey-label" placeholder="e.g. work laptop, phone" maxlength="100">
+    <span class="helptext">Optional, but it makes the list readable when you add a second.</span>
+  </div>
+
+  <button type="button" id="passkey-register" class="btn btn--primary btn--lg btn--block">
+    Register a passkey
+  </button>
+
+  <div id="passkey-status" class="hidden mt1" role="status" aria-live="polite"></div>
+</div>
+
+<div class="card">
+  <h2>On a device that cannot do this?</h2>
+  <p class="muted mb0">
+    Sign out and open the link again — or ask for a fresh one — on a phone or laptop
+    that supports passkeys. Nothing has been lost; your account is waiting.
+  </p>
+  <form method="post" action="{% url 'accounts:logout' %}" class="mt1">
+    {% csrf_token %}
+    <button type="submit" class="btn">Sign out</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'js/passkeys.js' %}"></script>
+<script>
+  document.getElementById("passkey-register").addEventListener("click", function () {
+    window.VMSPasskeys.register({
+      beginUrl: "{% url 'accounts:webauthn_register_begin' %}",
+      finishUrl: "{% url 'accounts:webauthn_register_finish' %}",
+      buttonSelector: "#passkey-register",
+      statusSelector: "#passkey-status",
+      labelSelector: "#passkey-label",
+      fallbackRedirect: "/",
+    });
+  });
+</script>
+{% endblock %}

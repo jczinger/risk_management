@@ -15,11 +15,24 @@ How it works, and why this shape:
 * On success the response carries a **signed cookie naming the schema**. Every later
   request is bound to that schema by :class:`apps.core.middleware.VMSTenantMiddleware`
   before anything else runs.
-* Crucially the *session* still lives inside the church's own schema. That is what
-  keeps the isolation guarantee in docs/SECURITY.md true: swapping the tenant cookie
-  for another church's name does not carry your session with it, because the session
-  row does not exist over there. You land back at the login page, not in someone
-  else's data. The cookie selects a schema; it grants nothing.
+* Crucially, swapping the cookie for another church's name does not carry your access
+  with it. You land back at the login page, not in someone else's data. The cookie
+  selects a schema; it grants nothing.
+
+  What enforces that is worth stating precisely, because the obvious answer is wrong.
+  ``django.contrib.sessions`` is in SHARED_APPS only, so ``django_session`` exists once,
+  in ``public``, and every schema's search path reaches it — the session row *is* still
+  there after the swap. What fails is Django's ``_auth_user_hash`` check: it is an HMAC
+  over the user's ``password`` column, and ``get_user()`` recomputes it against the user
+  with that primary key **in the newly bound schema**. Two different people, two
+  different values, no session. Covered by ``CookieIntegrityTests``.
+
+  The consequence is that every account must hold a *distinct* password value. They are
+  all unusable markers now — nobody signs in with a password — but ``make_password(None)``
+  produces forty random characters per call, so they stay distinct. Writing one shared
+  marker across every row would quietly turn the cookie into a credential. See
+  ``apps/accounts/migrations/0002_login_links_no_passwords.py``, which is written the
+  long way round for exactly this reason.
 
 The cookie is **host-only** (no ``domain`` attribute), so it is never sent to a church
 subdomain. Hostname routing therefore still works untouched wherever a Domain row

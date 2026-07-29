@@ -20,9 +20,14 @@ docker compose exec web python manage.py provision_church \
 ```
 
 `--document-mode` is one of `store` (encrypted in-system), `link` (their own document store), or
-`track` (hard copy, dates only). Omit `--admin-password` for a passkey-only account.
+`track` (hard copy, dates only). There is no password to set — every account signs in with a
+passkey.
 
-Afterwards there is exactly one step: **escrow the printed key.** No DNS, no certificate, no
+Afterwards there are two steps: **escrow the printed key**, and **give the admin the printed
+sign-in link.** It is emailed to them as well, but it is shown once on the terminal (and on the
+console page, if you provisioned through the browser) so you can hand it over another way if the
+email does not land. It works once and expires in seven days; if it lapses they can ask for a new
+one from the sign-in page. No DNS, no certificate, no
 `ALLOWED_HOSTS` edit — the new church signs in at the same address as everyone else, and their
 admin's email address is what selects them.
 
@@ -196,26 +201,42 @@ count and any provider error.
 ## Administrators
 
 Each church manages its own, under **Administrators**. All of them have equal permissions within
-their church — there are no sub-roles by design.
+their church — there are no sub-roles by design. Adding one mints a single-use sign-in link,
+emailed and shown on screen.
 
-The operator cannot add a church's administrators from the console. If a church has locked itself
-out entirely:
+### Issuing a sign-in link by hand
+
+The operator's break-glass, and the only way in when email is not working:
+
+```bash
+docker compose exec web python manage.py issue_magic_link --email admin@church.ca
+```
+
+It prints one link per church the address is found at. Add `--schema firstoac` to narrow it, or
+`--purpose invite` for the longer-lived kind. The issue is written into that church's own audit
+trail, so they can see it happened and ask why.
+
+### If a church has locked itself out entirely
+
+Every administrator has lost their passkey *and* cannot receive email. Create a rescue account and
+issue it a link:
 
 ```bash
 docker compose exec web python manage.py shell -c "
 from django_tenants.utils import tenant_context
+from apps.accounts.links import issue_link
+from apps.accounts.models import LinkPurpose, User
 from apps.tenants.models import Tenant
-from apps.accounts.models import User
 t = Tenant.objects.get(schema_name='firstoac')
 with tenant_context(t):
-    u = User.objects.create_user(email='rescue@church.ca', password='<temp>',
+    u = User.objects.create_user(email='rescue@church.ca',
                                  first_name='Rescue', last_name='Admin')
-    print('created', u.pk)
+    print(issue_link(u, LinkPurpose.INVITE)[1])
 "
 ```
 
-They will be required to enrol an authenticator app on first sign-in. Tell the church this
-happened — it appears in their audit trail either way.
+Opening the printed link signs them in and holds them at passkey registration. Tell the church
+this happened — it appears in their audit trail either way.
 
 ---
 
@@ -253,6 +274,24 @@ recorded in error, that is a data-integrity incident: it needs a documented deci
 database correction by the operator, and it should leave a written record outside this system
 explaining what happened and why.
 
+**An administrator has lost their passkey.** They ask for a link from the sign-in page —
+"Email me a sign-in link" — and register a new one. Nothing is needed from you. When they use it,
+every *other* administrator at that church is emailed and it lands in the audit trail as
+**Sign-in link used**; that is deliberate, and worth explaining to a church before it surprises
+them. If they cannot receive email either, use `issue_magic_link` above.
+
+**Email is not configured yet, so no links are arriving.** Every place that mints one also shows
+it on screen — adding an administrator, provisioning a church — and `issue_magic_link` prints one
+on demand. With `EMAIL_PROVIDER=console` the message body also appears in `docker compose logs
+web`. Nothing is blocked; the links are simply handed over by another route.
+
+**Somebody keeps receiving sign-in links they did not ask for.** The recovery form is open to
+anyone who knows an address, so this is somebody guessing rather than a breach — and the links
+are useless to them, because they arrive in the target's mailbox. It is rate limited per address
+and per source. Tell them to ignore the emails, and treat it as a prompt to check the mailbox
+itself has a strong second factor: with no password in VMS, that mailbox is what protects the
+account.
+
 **A requirement was waived by mistake.** Fixable. On the volunteer's page the waived row offers
 **Reverse waiver**; it asks for a comment saying what was wrong, clears the waiver, and puts the
 requirement back where it stands — outstanding, or overdue if a date has passed. Both the original
@@ -285,15 +324,16 @@ cover everything the policy review deferred.
 **Can a church see another church's data?** No. Separate Postgres schemas, separate encryption
 keys, separate sessions. Tested in `apps/tenants/tests/test_isolation.py`.
 
-**Everyone shares one web address — how does it know which church I am?** From the address you
-sign in with. The choice is then held in a signed cookie naming your church's schema. Editing
-that cookie does not get you into another church: your session only exists in your own schema,
-so you would land back at the sign-in page. Tested in `apps/tenants/tests/test_shared_host.py`.
+**Everyone shares one web address — how does it know which church I am?** From your passkey, or
+from the link you were sent — a link carries its church inside a signed payload. The choice is
+then held in a signed cookie naming your church's schema. Editing that cookie does not get you
+into another church; it selects a schema and grants nothing. Tested in
+`apps/tenants/tests/test_shared_host.py`, and the mechanism is set out in docs/SECURITY.md.
 
-**Someone has admin accounts at two churches.** They need a different email address for each.
-If the same address and password exist at two churches, sign-in picks the first alphabetically
-and logs a warning — so give them `name+churchA@…` and `name+churchB@…`, which VMS treats as
-two distinct addresses.
+**Someone has admin accounts at two churches.** This works. Asking for a sign-in link sends one
+per church, each naming which, so both accounts stay reachable. Separate addresses
+(`name+churchA@…`, `name+churchB@…`) are still tidier if they would rather not choose from an
+inbox.
 
 **Can the operator read a church's data?** Technically yes — the operator holds the master key.
 That is an accepted trade-off recorded in PRD §5, made in exchange for a guarantee that no church

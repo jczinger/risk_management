@@ -28,10 +28,6 @@ class Command(BaseCommand):
         parser.add_argument("--admin-first-name", default="")
         parser.add_argument("--admin-last-name", default="")
         parser.add_argument(
-            "--admin-password",
-            help="Omit for a passkey-only admin account.",
-        )
-        parser.add_argument(
             "--document-mode",
             choices=DocumentMode.values,
             default=DocumentMode.STORE,
@@ -54,7 +50,6 @@ class Command(BaseCommand):
                 admin_email=options["admin_email"],
                 admin_first_name=options["admin_first_name"],
                 admin_last_name=options["admin_last_name"],
-                admin_password=options["admin_password"],
                 document_mode=options["document_mode"],
                 reminder_lead_days=options["reminder_lead_days"],
                 seed_template=not options["no_seed"],
@@ -71,6 +66,17 @@ class Command(BaseCommand):
         self.stdout.write(f"  First admin:         {result.admin_email}")
         self.stdout.write(f"  Requirements seeded: {result.seeded_requirements}")
         self.stdout.write(f"  Key fingerprint:     {result.dek_fingerprint}")
+
+        self.stdout.write(self.style.MIGRATE_HEADING("\nFIRST SIGN-IN LINK (shown once)"))
+        self.stdout.write(f"  {result.invite_url}\n")
+        self.stdout.write(
+            self.style.WARNING(
+                "Send this to the admin, or hand it over in person. It works once, it\n"
+                "expires, and using it takes them straight to registering a passkey —\n"
+                "which is how they will sign in from then on. If it lapses, they can ask\n"
+                "for another from the sign-in page."
+            )
+        )
 
         self.stdout.write(self.style.MIGRATE_HEADING("\nDATA ENCRYPTION KEY (shown once)"))
         self.stdout.write(f"  {result.dek_b64}\n")

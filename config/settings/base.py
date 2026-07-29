@@ -121,6 +121,9 @@ MIDDLEWARE = [
     "django_htmx.middleware.HtmxMiddleware",
     # Records the acting user + request metadata for the audit trail.
     "apps.core.middleware.AuditContextMiddleware",
+    # Holds an account with no passkey at enrolment. Before the key-backup gate: a new
+    # church's admin trips both at once, and the passkey has to come first.
+    "apps.accounts.middleware.ForcePasskeyMiddleware",
     # Forces a freshly provisioned tenant's admin through the DEK backup step.
     "apps.tenants.middleware.ForceKeyBackupMiddleware",
 ]
@@ -176,24 +179,12 @@ DATABASE_ROUTERS = ("django_tenants.routers.TenantSyncRouter",)
 # Authentication
 # ---------------------------------------------------------------------------
 
-# Argon2 first: every new/changed password is hashed with it, and existing hashes
-# in the weaker schemes are upgraded transparently on next login.
-PASSWORD_HASHERS = [
-    "django.contrib.auth.hashers.Argon2PasswordHasher",
-    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
-    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
-    "django.contrib.auth.hashers.ScryptPasswordHasher",
-]
-
-AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-        "OPTIONS": {"min_length": 12},
-    },
-    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
-    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
-]
+# There are no passwords. Every account signs in with a passkey, and the two moments
+# a passkey is not available yet — first sign-in, and recovery after losing one — are
+# covered by a single-use emailed link. So no PASSWORD_HASHERS and no
+# AUTH_PASSWORD_VALIDATORS: nothing hashes a password and nothing validates one. The
+# `password` column still exists because AbstractBaseUser owns it, holding Django's
+# unusable marker on every row. See BUILD_NOTES §1.20.
 
 LOGIN_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/"
@@ -205,8 +196,28 @@ LOGOUT_REDIRECT_URL = "/accounts/login/"
 WEBAUTHN_RP_ID = env("WEBAUTHN_RP_ID", default=VMS_BASE_DOMAIN)
 WEBAUTHN_RP_NAME = env("WEBAUTHN_RP_NAME", default="Volunteer Management System")
 
-# Failed logins allowed per (username, IP) before the form starts refusing.
-LOGIN_RATELIMIT = env("LOGIN_RATELIMIT", default="10/5m")
+# Passkey ceremonies allowed per IP before the endpoints start refusing. These are now
+# the only interactive way in, and an unknown credential costs a scan across every
+# church's schema, so they cannot stay unmetered.
+LOGIN_RATELIMIT = env("LOGIN_RATELIMIT", default="30/5m")
+
+# How long a sign-in link lives. An invite may sit unread over a weekend; a recovery
+# link is being used right now, so a short window limits what a forwarded email is
+# worth. Both are single-use regardless.
+VMS_INVITE_LINK_DAYS = env.int("VMS_INVITE_LINK_DAYS", default=7)
+VMS_RECOVERY_LINK_MINUTES = env.int("VMS_RECOVERY_LINK_MINUTES", default=30)
+
+# Scheme and host for the links we email. Set once here rather than read off the
+# request, because a link is minted from a web view, a console view and the command
+# line, and only two of those have a request to read it from. The host is separate from
+# VMS_BASE_DOMAIN because that one doubles as a Domain row's hostname and so cannot
+# carry a port.
+VMS_LINK_SCHEME = env("VMS_LINK_SCHEME", default="https")
+VMS_LINK_HOST = env("VMS_LINK_HOST", default=VMS_BASE_DOMAIN)
+
+# Recovery links requested per address, and per source IP, before the form refuses.
+# Tighter than the passkey limit: each request sends real email to a real person.
+VMS_RECOVERY_RATELIMIT = env("VMS_RECOVERY_RATELIMIT", default="3/1h")
 
 
 # ---------------------------------------------------------------------------

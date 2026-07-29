@@ -35,18 +35,39 @@
   </p>
 </div>
 
+{% if invite_url %}
+<div class="card">
+  <div class="card-head">
+    <h2>The first administrator's sign-in link</h2>
+    <span class="badge badge--info">Shown once</span>
+  </div>
+  <div style="padding: 0 1.25rem 1.25rem">
+    <p class="muted">
+      Emailed to {{ admin_email }}, and shown here so you can hand it over another way if
+      the email does not arrive. It works once. If it lapses they can ask for a new one
+      from the sign-in page.
+    </p>
+    <div class="keybox">{{ invite_url }}</div>
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   <h2>What happens next</h2>
   <ol class="stack">
     <li>
-      The first administrator signs in at
+      The first administrator opens their sign-in link
       {% with domain=church.primary_domain %}
-        {% if domain %}<code>https://{{ domain.domain }}/</code>{% else %}<em>no hostname configured</em>{% endif %}
+        {% if domain %}(their church also has its own hostname, <code>https://{{ domain.domain }}/</code>){% endif %}
       {% endwith %}
     </li>
     <li>
-      They are held at a mandatory key-backup step until they confirm they have saved
-      their own offline copy. They cannot reach the rest of the system before that.
+      They are held at passkey registration until they have one. A passkey is the only
+      way to sign in; the link they arrived on is now spent.
+    </li>
+    <li>
+      Then at a mandatory key-backup step until they confirm they have saved their own
+      offline copy. They cannot reach the rest of the system before that.
     </li>
     <li>They set up departments and roles, then start onboarding volunteers.</li>
   </ol>

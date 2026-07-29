@@ -12,7 +12,8 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django_tenants.utils import get_public_schema_name, schema_context
 
-from apps.accounts.models import User
+from apps.accounts.links import issue_link
+from apps.accounts.models import LinkPurpose, User
 from apps.core.blind_index import email_index
 from apps.core.keys import forget_cached_keys
 from apps.tenants.models import Domain, Tenant
@@ -26,13 +27,6 @@ class Command(BaseCommand):
         parser.add_argument("--first-name", default="")
         parser.add_argument("--last-name", default="")
         parser.add_argument(
-            "--password",
-            help=(
-                "Optional. Or set VMS_SUPERADMIN_PASSWORD. Omit for a passkey-only "
-                "account, which then needs a passkey registered before first sign-in."
-            ),
-        )
-        parser.add_argument(
             "--domain",
             help="Hostname for the platform itself. Defaults to VMS_BASE_DOMAIN.",
         )
@@ -45,7 +39,6 @@ class Command(BaseCommand):
         if not email:
             raise CommandError("Pass --email or set VMS_SUPERADMIN_EMAIL.")
 
-        password = options["password"] or os.environ.get("VMS_SUPERADMIN_PASSWORD") or None
         domain_name = (options["domain"] or settings.VMS_BASE_DOMAIN).strip().lower()
         public = get_public_schema_name()
 
@@ -110,9 +103,6 @@ class Command(BaseCommand):
                 if not existing.is_staff:
                     existing.is_staff = True
                     changed.append("is_staff")
-                if password:
-                    existing.set_password(password)
-                    changed.append("password")
                 if changed:
                     existing.save(update_fields=changed)
                     self.stdout.write(
@@ -121,21 +111,22 @@ class Command(BaseCommand):
                 else:
                     self.stdout.write("Super-admin already present and correct.")
             else:
-                User.objects.create_superuser(
+                user = User.objects.create_superuser(
                     email=email,
-                    password=password,
                     first_name=options["first_name"],
                     last_name=options["last_name"],
                 )
                 self.stdout.write(self.style.SUCCESS(f"Created super-admin {email}."))
-                if not password:
-                    self.stdout.write(
-                        self.style.WARNING(
-                            "No password was set, so this account can only sign in with "
-                            "a passkey. Register one from the sign-in page on "
-                            f"https://{domain_name}/accounts/login/ — or re-run this "
-                            "command with --password to add a fallback."
-                        )
+
+                _, url = issue_link(user, LinkPurpose.INVITE)
+                self.stdout.write(self.style.MIGRATE_HEADING("\nFIRST SIGN-IN LINK"))
+                self.stdout.write(f"  {url}\n")
+                self.stdout.write(
+                    self.style.WARNING(
+                        "Open this once to sign in, then register a passkey — which is\n"
+                        "how the console is reached from then on. There is no password.\n"
+                        "If it expires, run `manage.py issue_magic_link` for another."
                     )
+                )
 
         self.stdout.write(self.style.SUCCESS("Bootstrap complete."))

@@ -17,10 +17,9 @@ whitenoise==6.11.0
 celery[redis]==5.5.3
 
 # --- Auth ---
-argon2-cffi==25.1.0
+# Passkeys are the only way in, so there is nothing here for passwords (argon2-cffi) or
+# authenticator apps (pyotp, qrcode) any more. See BUILD_NOTES §1.20.
 webauthn==2.7.0
-pyotp==2.9.0
-qrcode[pil]==8.2
 django-ratelimit==4.1.0
 
 # --- Crypto (field-level encryption, AES-256-GCM) ---

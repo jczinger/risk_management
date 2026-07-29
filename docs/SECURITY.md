@@ -27,8 +27,10 @@ Postgres. A dump yields base64 noise for every one of them.
 | An off-host backup leaks | Same, and the master key is deliberately not in the archive |
 | A stolen database credential | Reads ciphertext only |
 | One church's data reaching another | Separate schemas *and* separate keys — two independent barriers |
-| A stolen password | Useless alone; the fallback path always requires TOTP |
 | Phishing for credentials | A passkey cannot be phished; it is bound to the origin |
+| A guessed or reused password | There are none to guess. Nothing in the system accepts one |
+| A stolen sign-in link | Works once, expires, and only reaches passkey enrolment |
+| **Access to an administrator's mailbox** | **Not defended.** See below |
 
 ### What it does **not** defend against
 
@@ -136,7 +138,7 @@ meaningfully less identifying than an exact date.
 | Original filenames | `Document.original_filename` |
 | Audit before/after detail | `AuditEvent.detail` |
 | Email recipients, subjects, bodies | `EmailLog` |
-| TOTP secrets, passkey labels | `User`, `Passkey` |
+| Passkey labels | `Passkey` |
 
 ### The consequence you must design around
 
@@ -152,27 +154,58 @@ by address. See `apps/core/blind_index.py` for its properties and limits.
 
 ## Authentication
 
-**Passkeys (WebAuthn) are primary.** Not phishable, no shared secret to steal, and a passkey login
-is not additionally prompted for a code — the authenticator has already proven possession of an
-unlocked device.
+**A passkey is the only way to sign in.** Not phishable, no shared secret to steal, and no second
+factor to add — the authenticator has already proven possession of an unlocked device. There is no
+password path, no authenticator app, and no recovery codes; the code for them was removed rather
+than disabled (BUILD_NOTES §1.20).
 
-**Password + TOTP is the fallback**, and the TOTP half is mandatory. An account with a usable
-password but no confirmed authenticator app is sent to enrolment before it can reach anything
-else. A password alone is never sufficient.
+**A single-use link covers the two moments a passkey does not exist yet:** the first sign-in after
+an account is created, and recovery after a lost passkey or a replaced device. A link is emailed,
+works once, and expires — seven days for an invite, thirty minutes for a recovery. Opening one
+signs the holder in and drops them at passkey enrolment.
 
-**Passwords** are hashed with Argon2id (`argon2-cffi`), never reversibly stored.
+**Only the hash of a link is stored** (SHA-256 of 256 bits of randomness), so a database dump
+contains nothing that can be used to sign in. The URL carries a *signed* payload naming the
+schema the account lives in, because consuming it binds the connection to that schema and nothing
+attacker-chosen may reach that call.
 
-**Lockout guards.** The system refuses to remove your last way in: the final passkey cannot be
-removed without a working password *and* TOTP; TOTP cannot be removed from a password-only
-account; the last active administrator at a church cannot be deactivated; nobody can deactivate
-themselves.
+**Enrolment is compulsory, not suggested.** `ForcePasskeyMiddleware` redirects every request from
+an account with no passkey to the enrolment page. Only signing out, the WebAuthn endpoints and the
+health check stay reachable — a redirect from one view would be escaped by typing another URL.
 
-**Rate limiting.** Failed logins are limited per email address *and* per source IP — the first
-stops one account being ground down, the second stops one source spraying many.
+**Accounts hold Django's unusable password marker**, one distinct value per row. This is
+load-bearing rather than cosmetic: see "Which church a request belongs to" below.
 
-**Enumeration.** Wrong address, wrong password, deactivated account and suspended church all
-produce the same message, so the login form cannot be used to discover who works at a church —
-or at which church someone works. See "Which church a request belongs to" below.
+**Lockout guards.** The last active administrator at a church cannot be deactivated, and nobody
+can deactivate themselves. Removing your last *passkey* is now allowed — it is no longer a
+lockout, because recovery by email exists.
+
+**Rate limiting.** The passkey endpoints are limited per source IP; they were previously
+unmetered, which stopped being defensible once they became the only interactive way in. Recovery
+requests are limited per address *and* per source IP, more tightly, because each one that lands
+sends real mail to a real person.
+
+**Enumeration.** An unknown address, a deactivated account and a suspended church all produce the
+same page from the recovery form, so it cannot be used to discover who works at a church — or at
+which church someone works. Every way a link can fail — expired, spent, forged, never real —
+renders one identical refusal.
+
+### What this costs, stated plainly
+
+**Whoever controls an administrator's mailbox controls the account.** With no password and no
+second factor, email is the root of trust. This is the standard arrangement for products of this
+kind, and it is a real reduction from what came before, where a stolen password was useless
+without a TOTP device.
+
+Three things bound it rather than prevent it:
+
+- A recovery link lives thirty minutes and works once.
+- Using one is written to the church's audit trail as **Sign-in link used**.
+- Using one **emails every other administrator at that church**. A takeover cannot be stopped by
+  anything in this system; being noticed the same morning is the realistic defence.
+
+A church that wants more should keep more than one administrator, and administrators should hold
+mailboxes with their own strong second factor. Neither is something VMS can enforce.
 
 ---
 
@@ -197,10 +230,21 @@ argument:
 
 * It is signed with `SECRET_KEY`, so it cannot be forged. An unsigned or tampered value is
   ignored *and deleted*.
-* It names a schema; it does not authenticate anyone. The session that actually authorises a
-  request still lives inside that church's schema. Repoint the cookie at another church and
-  your session key does not exist over there — you arrive **anonymous at the login page**, not
-  inside someone else's data.
+* It names a schema; it does not authenticate anyone. Repoint the cookie at another church and
+  you arrive **anonymous at the login page**, not inside someone else's data.
+
+  Why, precisely — because the obvious answer is wrong and worth correcting. Sessions are *not*
+  per church: `django.contrib.sessions` is in SHARED_APPS only, so one `django_session` table
+  sits in `public` and every schema's search path reaches it. The row survives the swap. What
+  fails is Django's `_auth_user_hash`, an HMAC over the user's `password` column, which
+  `get_user()` recomputes against the user holding that primary key **in the newly bound
+  schema**. Different person, different value, no session.
+
+  That is why every account must hold a *distinct* password value. They are all unusable
+  markers — nothing accepts a password — but `make_password(None)` yields forty random
+  characters per call, so they stay distinct. One shared marker written across every row would
+  turn this cookie into a credential; the passwordless migration is written the long way round
+  for exactly that reason, and there is a test that fails if it is shortened.
 * A cookie naming a suspended or unknown church is dropped and the visitor is treated as
   signed out.
 * Signing out clears it, so the next person at that browser does not inherit the church.
@@ -213,11 +257,15 @@ each other. An unknown hostname is **refused** (`SHOW_PUBLIC_IF_NO_TENANT_FOUND 
 stray DNS entry cannot reach the operator's console. The single exception is `/healthz/`, which
 answers on any hostname and returns nothing but `{"status": "ok"}`.
 
-**What the sign-in form does not reveal.** Resolving the church means searching every schema
-for the submitted address. A wrong password, an unknown address, a deactivated account and a
-suspended church all produce the same message, so the form cannot be used to discover that an
-address is known at *some other* church. An address found nowhere still costs one password
-hash, so response time does not distinguish the two either.
+**What the recovery form does not reveal.** Finding which churches an address belongs to means
+searching every schema for it. An unknown address, a deactivated account and a suspended church
+all produce the same page, so the form cannot be used to discover that an address is known at
+*some other* church. Nothing is decrypted during the search — only the blind index is compared —
+so it never needs a church's key either.
+
+An address held at two churches receives one link per church, each naming which. That is an
+improvement on the password form it replaces, which had to pick one and picked the first
+alphabetically, leaving the second account quietly unreachable.
 
 The public schema holds no church data at all — only the registry, wrapped keys, and the
 super-admin. The console does not browse tenant data.

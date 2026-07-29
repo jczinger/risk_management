@@ -1,0 +1,21 @@
+{% if church_name %}{{ church_name }} — v{% else %}V{% endif %}olunteer Management System
+
+Hello {{ user.get_short_name|default:"there" }},
+
+Somebody asked for a sign-in link for this address{% if church_name %} at {{ church_name }}{% endif %}.
+
+Open this link to sign in and register a new passkey:
+
+{{ url }}
+
+The link works once and expires in {{ expires_in }}. The passkeys you already have keep
+working — registering another does not remove them, so if you find the old device you can
+still use it.
+
+IF THIS WAS NOT YOU: ignore this email. Nothing has changed on your account and the link
+expires shortly. If you keep receiving these, tell another administrator at your church —
+someone may be trying to get in through your mailbox.
+
+--
+Every sign-in is logged. When a recovery link is used, the other administrators at your
+church are told.

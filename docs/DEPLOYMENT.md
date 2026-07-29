@@ -139,15 +139,22 @@ docker compose logs migrate         # confirm the migrations applied
 ```bash
 docker compose exec web python manage.py bootstrap_superadmin \
     --email you@example.ca \
-    --first-name Your --last-name Name \
-    --password '<a strong password>'
+    --first-name Your --last-name Name
 ```
 
 This also creates the registry row and hostname for the platform itself. It is safe to re-run.
 
-Omit `--password` for a passkey-only operator account — more secure, but you will need a passkey
-registered before you can sign in at all, so set a password on the first run and add a passkey
-afterwards.
+There is no password to set. **The command prints a one-time sign-in link** — open it, register a
+passkey, and that is how you reach the console from then on. If the link expires before you get
+to it:
+
+```bash
+docker compose exec web python manage.py issue_magic_link \
+    --email you@example.ca --schema public
+```
+
+That command is the operator's break-glass and needs shell access to this host, which is why it
+can be trusted to hand out a sign-in without one.
 
 ---
 
@@ -189,12 +196,13 @@ docker compose exec web python manage.py provision_church \
     --name "First OAC" \
     --code firstoac \
     --admin-email josh.czinger@shiftit.ca \
-    --admin-first-name Josh --admin-last-name Czinger \
-    --admin-password '<temporary password>'
+    --admin-first-name Josh --admin-last-name Czinger
 ```
 
 This creates the schema, generates the church's encryption key, adds the first screening
-administrator, and seeds the 14 Plan to Protect requirements.
+administrator, and seeds the 14 Plan to Protect requirements. It prints the admin's one-time
+sign-in link as well as the key — the link is emailed too, but give it to them directly if you
+have any doubt the email will land.
 
 **The command prints the church's encryption key once.** Copy it into Keeper Security under the
 church's name and the fingerprint shown. If you lose it, it is still recoverable while the master
@@ -244,10 +252,12 @@ decrypts, which a row count alone would not.
 Then, by hand:
 
 1. Sign in to the console; the church is listed.
-2. Sign in as the church admin; the key-backup gate appears; confirm it.
-3. Add a department and a role; add a volunteer; assign the role — their requirements appear.
-4. Register a passkey from **Account → Security**, sign out, and sign back in with it.
-5. Open **Reports → Compliance report** and download the PDF.
+2. Open the church admin's sign-in link. It signs you in and stops at passkey registration —
+   confirm that every other URL bounces back to it until a passkey exists.
+3. Register a passkey. The key-backup gate appears next; confirm it.
+4. Add a department and a role; add a volunteer; assign the role — their requirements appear.
+5. Sign out and back in with the passkey. Open the used link again and confirm it is refused.
+6. Open **Reports → Compliance report** and download the PDF.
 
 ---
 
@@ -284,8 +294,14 @@ signed `vms_tenant` cookie set at sign-in. Clear cookies for the site and sign i
 church was renamed at the schema level — which is not supported — the cookie will name a schema
 that no longer exists; it is dropped automatically and the visitor is returned to sign-in.
 
-**"That email address and password combination was not recognised" for a known-good account.**
-The address has to exist in exactly one church. Check with:
+**A sign-in link never arrives.** Check **Reports → Reminder emails** for the delivery attempt
+and any provider error, then issue one by hand with `manage.py issue_magic_link --email …`. Every
+place that mints a link also shows it on screen, so nobody is ever blocked on email working.
+
+**"That sign-in link is no longer valid."** One page covers every cause — used, expired, tampered
+with, or an address with no account — deliberately, so it cannot be used to find out whether an
+account exists. The commonest real cause is an email client wrapping the URL across two lines.
+Check which schemas hold an address with:
 
 ```bash
 docker compose exec web python manage.py shell -c "from apps.tenants.routing import find_login_targets; print([(t.schema_name, t.label) for t in find_login_targets('admin@church.ca')])"
@@ -293,6 +309,10 @@ docker compose exec web python manage.py shell -c "from apps.tenants.routing imp
 
 An empty list means no active account with that address anywhere — check the spelling, that the
 account is active, and that the church is not suspended.
+
+**Somebody is stuck on the "Set up your passkey" page.** That gate is deliberate and only a
+passkey clears it. If their browser or device cannot do WebAuthn, they sign out from that page and
+open a fresh link on one that can. Nothing is lost meanwhile.
 
 **`web` restarts repeatedly.** `docker compose logs web`. Most often a settings guard refusing to
 boot: a missing `PLATFORM_MASTER_KEY`, an empty `ALLOWED_HOSTS`, or a `DJANGO_SECRET_KEY` under 50

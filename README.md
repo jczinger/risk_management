@@ -74,7 +74,7 @@ ACS email settings, then:
 ```bash
 docker compose up -d
 docker compose exec web python manage.py bootstrap_superadmin \
-    --email you@example.ca --first-name Your --last-name Name --password '…'
+    --email you@example.ca --first-name Your --last-name Name
 ```
 
 Point Nginx Proxy Manager at `127.0.0.1:8020` for the base domain, then sign in at
@@ -111,9 +111,9 @@ Create a `.env` for development — `DJANGO_SETTINGS_MODULE=config.settings.dev`
 
 ```bash
 .venv/bin/python manage.py migrate_schemas --shared
-.venv/bin/python manage.py bootstrap_superadmin --email you@example.ca --password '…' --domain localhost
+.venv/bin/python manage.py bootstrap_superadmin --email you@example.ca --domain localhost
 .venv/bin/python manage.py provision_church --name "First OAC" --code firstoac \
-    --domain firstoac.localhost --admin-email you@example.ca --admin-password '…'
+    --domain firstoac.localhost --admin-email you@example.ca
 .venv/bin/python manage.py runserver
 ```
 
@@ -122,7 +122,9 @@ The console is at <http://localhost:8000/> and the church at <http://firstoac.lo
 needed.
 
 Passkeys need a secure context. `localhost` counts as one, so passkey registration and sign-in
-work in development without TLS.
+work in development without TLS. Both commands above print a one-time sign-in link — there is no
+password. `EMAIL_PROVIDER` defaults to `console`, so links also appear in the server output, and
+`manage.py issue_magic_link --email …` mints one on demand.
 
 ### Tests
 
@@ -132,8 +134,8 @@ work in development without TLS.
 .venv/bin/python -m pytest apps/requirements  # one area
 ```
 
-519 tests, including the `pg_dump` leak check, tenant isolation, shared-hostname routing, the
-age rules, and a render sweep over every page.
+545 tests, including the `pg_dump` leak check, tenant isolation, shared-hostname routing, the
+sign-in link and passkey-enrolment gates, the age rules, and a render sweep over every page.
 
 ---
 
@@ -144,7 +146,7 @@ config/            Django project — settings (base/dev/prod/test), URLs, Celer
 apps/
   core/            Encryption, blind indexes, audit trail, base models, nightly tasks
   tenants/         Public-schema church registry, provisioning, key custody
-  accounts/        Screening admins, passkeys, TOTP
+  accounts/        Screening admins, passkeys, sign-in links
   org/             Departments, roles, volunteers, assignments
   requirements/    The requirement engine, seed template, criminal record checks
   documents/       Three storage modes, encrypted uploads
@@ -161,7 +163,8 @@ docs/              Deployment, operations, security, acceptance
 ## Stack
 
 Python 3.13 · Django 5.2 LTS · PostgreSQL 16 with `django-tenants` · HTMX · Celery + Redis ·
-WebAuthn passkeys with Argon2 + TOTP fallback · Azure Communication Services Email (Canada) ·
+WebAuthn passkeys, with a single-use emailed link for first sign-in and recovery ·
+Azure Communication Services Email (Canada) ·
 Docker Compose.
 
 All data at rest stays on the host. Canadian residency, PIPEDA and BC PIPA.

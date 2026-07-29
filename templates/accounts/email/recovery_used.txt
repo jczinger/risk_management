@@ -1,0 +1,12 @@
+Volunteer Management System — account recovery
+
+{{ user.get_full_name|default:"An administrator" }} used a sign-in link to recover their
+account on {{ when|date:"l j F Y" }} at {{ when|date:"H:i" }}.
+
+This is normal after somebody loses a passkey or replaces a device, and you are being
+told because it is the kind of thing worth noticing rather than because it is wrong.
+
+Nothing is needed from you if they mentioned it, or if you can ask them and they confirm
+it. If they did not do this, their email account may have been reached by somebody else —
+in which case act now: their VMS account can be deactivated from Administrators, and the
+audit trail under Reports shows everything done since.

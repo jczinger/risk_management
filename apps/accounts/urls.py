@@ -25,14 +25,12 @@ urlpatterns = [
         name="webauthn_register_finish",
     ),
     path("passkeys/<int:pk>/remove/", views.passkey_remove, name="passkey_remove"),
-    # TOTP
-    path("totp/verify/", views.totp_verify, name="totp_verify"),
-    path("totp/required/", views.totp_setup_required, name="totp_setup_required"),
-    path("totp/setup/", views.totp_setup, name="totp_setup"),
-    path("totp/disable/", views.totp_disable, name="totp_disable"),
+    path("passkey-required/", views.passkey_required, name="passkey_required"),
+    # Sign-in links
+    path("recover/", views.recover_request, name="recover"),
+    path("link/<str:payload>/", views.link_consume, name="link_consume"),
     # Own account
     path("security/", views.security, name="security"),
-    path("password/", views.password_change, name="password_change"),
     path("profile/", views.profile, name="profile"),
     # This church's other admins
     path("administrators/", views.admin_list, name="admin_list"),

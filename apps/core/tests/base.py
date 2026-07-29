@@ -84,12 +84,38 @@ class TenantTestCase(FastTenantTestCase):
 
     # -- Factories ---------------------------------------------------------
 
-    def make_admin(self, email="admin@test.ca", password="TestPassw0rd!2026", **extra):
+    def make_admin(self, email="admin@test.ca", **extra):
+        """
+        An administrator. Passwordless, like every real one — there are no passwords.
+
+        No passkey either, which matters for anything going through the request stack:
+        ``ForcePasskeyMiddleware`` redirects an account without one to enrolment. Use
+        :meth:`make_passkey` when the test needs to get past that.
+        """
         from apps.accounts.models import User
 
         defaults = {"first_name": "Test", "last_name": "Admin"}
         defaults.update(extra)
-        return User.objects.create_user(email=email, password=password, **defaults)
+        return User.objects.create_user(email=email, **defaults)
+
+    def make_passkey(self, user, label="Test device"):
+        """
+        A registered passkey, without the WebAuthn ceremony.
+
+        The credential is not real — nothing here will verify a signature against it —
+        but its presence is what ``has_passkey`` reads, and that is what the enrolment
+        gate turns on.
+        """
+        import secrets
+
+        from apps.accounts.models import Passkey
+
+        return Passkey.objects.create(
+            user=user,
+            credential_id=secrets.token_urlsafe(24),
+            public_key=b"not-a-real-key",
+            label=label,
+        )
 
     def make_department(self, name="Children's Ministry", **extra):
         from apps.org.models import Department
@@ -127,11 +153,20 @@ class TenantTestCase(FastTenantTestCase):
 
         return seed_default_template()
 
-    def signed_in_client(self, user=None):
-        """A test client with a signed-in admin, bypassing the passkey/TOTP ceremony."""
+    def signed_in_client(self, user=None, *, with_passkey=True):
+        """
+        A test client with a signed-in admin, bypassing the WebAuthn ceremony.
+
+        The user is given a passkey by default. Without one every request would be
+        redirected to enrolment by ``ForcePasskeyMiddleware``, which is correct
+        behaviour and would make this helper useless for testing anything else. Pass
+        ``with_passkey=False`` when the gate itself is what is under test.
+        """
         from django.test import Client
 
         user = user or self.make_admin()
+        if with_passkey and not user.has_passkey:
+            self.make_passkey(user)
         client = Client(HTTP_HOST=self.TEST_DOMAIN)
         client.force_login(user)
         return client

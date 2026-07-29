@@ -80,7 +80,6 @@ def church_create(request):
                     admin_email=data["admin_email"],
                     admin_first_name=data["admin_first_name"],
                     admin_last_name=data["admin_last_name"],
-                    admin_password=data["admin_password"] or None,
                     document_mode=data["document_mode"],
                     contact_name=data["contact_name"],
                     contact_email=data["contact_email"],
@@ -90,12 +89,14 @@ def church_create(request):
             except ProvisioningError as exc:
                 form.add_error(None, str(exc))
             else:
-                # The raw key is shown on the next page only, and is passed via the
-                # session rather than the URL so it stays out of proxy logs and
-                # browser history. It is popped on first render.
+                # The raw key and the invite link are both shown on the next page
+                # only, and both travel in the session rather than the URL so they stay
+                # out of proxy logs and browser history. Popped on first render.
                 request.session["provisioned_key"] = {
                     "tenant_id": result.tenant.pk,
                     "dek_b64": result.dek_b64,
+                    "invite_url": result.invite_url,
+                    "admin_email": result.admin_email,
                 }
                 return redirect("tenants:church_key_shown", pk=result.tenant.pk)
     else:
@@ -135,6 +136,8 @@ def church_key_shown(request, pk: int):
             "church": church,
             "dek_b64": stashed["dek_b64"],
             "fingerprint": church.dek_fingerprint,
+            "invite_url": stashed.get("invite_url", ""),
+            "admin_email": stashed.get("admin_email", ""),
         },
     )
 

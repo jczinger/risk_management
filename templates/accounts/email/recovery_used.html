@@ -1,0 +1,33 @@
+{% comment %}
+Sent to the church's *other* administrators when somebody recovers an account. Self-service
+recovery cannot stop a mailbox takeover; this is what makes one visible the same morning,
+which is the realistic defence.
+{% endcomment %}
+<div style="font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 15px; color: #16202c; line-height: 1.5; max-width: 640px;">
+
+  <h2 style="margin: 0 0 4px; font-size: 19px; color: #14496b;">An account was recovered</h2>
+  <p style="margin: 0 0 20px; color: #4a5a6b; font-size: 14px;">
+    Volunteer Management System
+  </p>
+
+  <p style="margin: 0 0 16px;">
+    <strong>{{ user.get_full_name|default:"An administrator" }}</strong> used a sign-in
+    link to recover their account on {{ when|date:"l j F Y" }} at {{ when|date:"H:i" }}.
+  </p>
+
+  <p style="margin: 0 0 16px; font-size: 14px; color: #4a5a6b;">
+    This is normal after somebody loses a passkey or replaces a device. You are being
+    told because it is worth noticing, not because it is wrong.
+  </p>
+
+  <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse: collapse; margin-bottom: 16px;">
+    <tr>
+      <td style="padding: 12px 14px; border-left: 3px solid #a4243b; background: #fbeef0; font-size: 14px;">
+        <strong style="color: #a4243b;">If they did not do this</strong><br>
+        Their email account may have been reached by somebody else. Deactivate their VMS
+        account under <strong>Administrators</strong>, and check
+        <strong>Reports &rarr; Audit trail</strong> for everything done since.
+      </td>
+    </tr>
+  </table>
+</div>

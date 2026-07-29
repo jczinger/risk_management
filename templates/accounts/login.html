@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% load static %}
 {% comment %}
-Sign-in. Passkey first, password behind a disclosure — passkeys are the primary method
-(Build Spec §1), and the layout should say so rather than treating them as an extra.
+Sign-in. One button, because there is one way in. The link route below it is recovery,
+not an alternative, and the copy should not invite anyone to treat it as one.
 {% endcomment %}
 
 {% block title %}Sign in{% endblock %}
@@ -12,7 +12,7 @@ Sign-in. Passkey first, password behind a disclosure — passkeys are the primar
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>Sign in{% if church_name %} — {{ church_name }}{% endif %}</h1>
+    <h1>Sign in</h1>
     <p class="lede">Volunteer Management System</p>
   </div>
 </div>
@@ -28,43 +28,19 @@ Sign-in. Passkey first, password behind a disclosure — passkeys are the primar
   </button>
 
   <div id="passkey-status" class="hidden mt1" role="status" aria-live="polite"></div>
-
-  <p class="small muted mt1 mb0">
-    No passkey yet? Sign in with your password below, then add one from
-    <strong>Account → Security</strong>.
-  </p>
 </div>
 
-<details class="disclosure" {% if form.errors or rate_limited %}open{% endif %}>
-  <summary>Sign in with a password instead</summary>
-
-  <div class="card">
-    {% if rate_limited %}
-      <div class="callout callout--danger">
-        <p class="mb0">
-          Too many attempts. Wait a few minutes, or use your passkey — passkey sign-in is
-          not rate limited in the same way.
-        </p>
-      </div>
-    {% endif %}
-
-    <form method="post" novalidate>
-      {% csrf_token %}
-      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
-      {% include "partials/form.html" with form=form %}
-      <button type="submit" class="btn btn--block">Continue</button>
-    </form>
-
-    <p class="small muted mt1 mb0">
-      A password on its own is not enough to get in. You will be asked for a code from
-      your authenticator app next, and prompted to set one up if you have not already.
-    </p>
-  </div>
-</details>
+<div class="card">
+  <h2>No passkey on this device?</h2>
+  <p class="muted">
+    If you have lost your passkey, replaced your phone, or have not set one up yet, we
+    can email you a link that signs you in once so you can register a new one.
+  </p>
+  <a class="btn btn--block" href="{% url 'accounts:recover' %}">Email me a sign-in link</a>
+</div>
 
 <p class="small faint">
-  Access to this system is logged. If you have lost access to both your passkey and your
-  authenticator app, ask another administrator at your church to help.
+  Access to this system is logged.
 </p>
 {% endblock %}
 

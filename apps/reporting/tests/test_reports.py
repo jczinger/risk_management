@@ -578,8 +578,6 @@ class PageRenderSweep(ReportingBase):
             reverse("reporting:email_log"),
             reverse("accounts:security"),
             reverse("accounts:profile"),
-            reverse("accounts:password_change"),
-            reverse("accounts:totp_setup"),
             reverse("accounts:admin_list"),
             reverse("accounts:admin_invite"),
         ]

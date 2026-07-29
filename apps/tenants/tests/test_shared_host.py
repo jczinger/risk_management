@@ -31,7 +31,7 @@ from apps.tenants.services import provision_church
 from apps.tenants.tests.test_console import PLATFORM_HOST, ConsoleTestCase
 
 LOGIN_URL = "/accounts/login/"
-PASSWORD = "SharedHostPass!2026"
+RECOVER_URL = "/accounts/recover/"
 
 
 class SharedHostTestCase(ConsoleTestCase):
@@ -50,7 +50,6 @@ class SharedHostTestCase(ConsoleTestCase):
             admin_email=f"admin@{code}.ca",
             admin_first_name="Alex",
             admin_last_name="Admin",
-            admin_password=PASSWORD,
         )
         # Otherwise ForceKeyBackupMiddleware redirects every authenticated request to
         # the key-backup gate, which is a different test's subject.
@@ -69,9 +68,20 @@ class SharedHostTestCase(ConsoleTestCase):
         client = self.anon()
         with tenant_context(tenant):
             user = get_user_model().objects.get(email_index__isnull=False)
+            self.give_passkey(user)
             client.force_login(user)
         client.cookies[TENANT_COOKIE_NAME] = sign_schema_name(tenant.schema_name)
         return client
+
+    def link_for(self, tenant: Tenant) -> str:
+        """A fresh sign-in link for a church's admin."""
+        from apps.accounts.links import issue_link
+        from apps.accounts.models import LinkPurpose
+
+        with tenant_context(tenant):
+            user = get_user_model().objects.get(email_index__isnull=False)
+            _, url = issue_link(user, LinkPurpose.RECOVERY)
+        return url
 
     @staticmethod
     def cookie_value(response) -> str | None:
@@ -80,86 +90,104 @@ class SharedHostTestCase(ConsoleTestCase):
 
 
 class AddressRoutingTests(SharedHostTestCase):
-    """The address decides the church."""
+    """
+    The address decides the church.
 
-    def test_an_address_routes_to_its_own_church(self):
-        response = self.anon().post(
-            LOGIN_URL, {"email": "admin@alpha.ca", "password": PASSWORD}
-        )
+    It used to do so through the password form. Now it does so twice over: the recovery
+    form finds every schema holding an address, and the link it sends carries its schema
+    in the signed payload. Consuming one is what sets the cookie.
+    """
+
+    def test_a_link_pins_the_browser_to_its_own_church(self):
+        response = self.anon().get(self.link_for(self.alpha))
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.cookie_value(response), sign_schema_name("alpha"))
 
-    def test_two_addresses_route_to_two_different_churches(self):
-        first = self.anon().post(LOGIN_URL, {"email": "admin@alpha.ca", "password": PASSWORD})
-        second = self.anon().post(LOGIN_URL, {"email": "admin@beta.ca", "password": PASSWORD})
+    def test_two_links_pin_to_two_different_churches(self):
+        first = self.anon().get(self.link_for(self.alpha))
+        second = self.anon().get(self.link_for(self.beta))
 
         self.assertEqual(self.cookie_value(first), sign_schema_name("alpha"))
         self.assertEqual(self.cookie_value(second), sign_schema_name("beta"))
         self.assertNotEqual(self.cookie_value(first), self.cookie_value(second))
 
-    def test_the_super_admin_lands_in_the_console_with_no_church_cookie(self):
-        response = self.anon().post(
-            LOGIN_URL, {"email": "operator@platform.ca", "password": "OperatorPass!2026"}
-        )
+    def test_the_super_admins_link_lands_in_the_console_with_no_church_cookie(self):
+        from apps.accounts.links import issue_link
+        from apps.accounts.models import LinkPurpose
+
+        with schema_context(get_public_schema_name()):
+            _, url = issue_link(self.operator, LinkPurpose.RECOVERY)
+
+        response = self.anon().get(url)
 
         self.assertEqual(response.status_code, 302)
-        # Cleared rather than set: the console *is* the no-cookie state.
+        # Cleared rather than set: the console *is* the no-cookie state, so a stale
+        # church cookie must not survive the operator signing in.
         self.assertIn(self.cookie_value(response), (None, ""))
 
-    def test_an_unknown_address_sets_no_cookie(self):
-        response = self.anon().post(
-            LOGIN_URL, {"email": "nobody@nowhere.ca", "password": PASSWORD}
-        )
+    def test_a_stale_church_cookie_is_cleared_by_the_operators_link(self):
+        from apps.accounts.links import issue_link
+        from apps.accounts.models import LinkPurpose
+
+        with schema_context(get_public_schema_name()):
+            _, url = issue_link(self.operator, LinkPurpose.RECOVERY)
+
+        client = self.anon()
+        client.cookies[TENANT_COOKIE_NAME] = sign_schema_name("alpha")
+        response = client.get(url)
+
+        self.assertEqual(self.cookie_value(response), "")
+
+    def test_requesting_a_link_for_an_unknown_address_sets_no_cookie(self):
+        response = self.anon().post(RECOVER_URL, {"email": "nobody@nowhere.ca"})
 
         self.assertEqual(response.status_code, 200)
         self.assertIsNone(self.cookie_value(response))
 
-    def test_a_wrong_password_is_refused_generically_and_sets_no_cookie(self):
-        response = self.anon().post(
-            LOGIN_URL, {"email": "admin@alpha.ca", "password": "not the password"}
-        )
+    def test_the_recovery_form_does_not_reveal_that_an_address_exists_at_a_church(self):
+        """
+        The enumeration guarantee, carried over from the password form. This form is
+        reachable by anyone, so a distinct "no such account" would map out who
+        administers which church.
+        """
+        known = self.anon().post(RECOVER_URL, {"email": "admin@alpha.ca"})
+        unknown = self.anon().post(RECOVER_URL, {"email": "nobody@nowhere.ca"})
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNone(self.cookie_value(response))
-        self.assertContains(response, "was not recognised")
+        self.assertEqual(known.status_code, unknown.status_code)
+        self.assertEqual(known.content, unknown.content)
 
-    def test_the_form_does_not_reveal_that_an_address_exists_at_another_church(self):
-        """A wrong password and an unknown address must be indistinguishable."""
-        wrong_password = self.anon().post(
-            LOGIN_URL, {"email": "admin@alpha.ca", "password": "not the password"}
-        )
-        unknown_address = self.anon().post(
-            LOGIN_URL, {"email": "nobody@nowhere.ca", "password": "not the password"}
-        )
+    def test_an_address_at_a_suspended_church_gets_no_link(self):
+        from apps.accounts.models import LinkPurpose, LoginLink
 
-        self.assertEqual(wrong_password.status_code, unknown_address.status_code)
-        self.assertContains(wrong_password, "was not recognised")
-        self.assertContains(unknown_address, "was not recognised")
-
-    def test_an_address_at_a_suspended_church_cannot_sign_in(self):
         Tenant.objects.filter(pk=self.beta.pk).update(is_active=False)
 
-        response = self.anon().post(LOGIN_URL, {"email": "admin@beta.ca", "password": PASSWORD})
+        response = self.anon().post(RECOVER_URL, {"email": "admin@beta.ca"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertIsNone(self.cookie_value(response))
+        with tenant_context(self.beta):
+            # Filtered by purpose: provisioning already minted an invite for this admin,
+            # so a bare exists() would only be measuring the fixture.
+            self.assertFalse(LoginLink.objects.filter(purpose=LinkPurpose.RECOVERY).exists())
 
-    def test_a_deactivated_admin_cannot_sign_in(self):
+    def test_a_deactivated_admin_gets_no_link(self):
+        from apps.accounts.models import LinkPurpose, LoginLink
+
         with tenant_context(self.alpha):
             get_user_model().objects.update(is_active=False)
 
-        response = self.anon().post(LOGIN_URL, {"email": "admin@alpha.ca", "password": PASSWORD})
+        response = self.anon().post(RECOVER_URL, {"email": "admin@alpha.ca"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertIsNone(self.cookie_value(response))
+        with tenant_context(self.alpha):
+            self.assertFalse(LoginLink.objects.filter(purpose=LinkPurpose.RECOVERY).exists())
 
 
 class CookieIntegrityTests(SharedHostTestCase):
     """The cookie selects a schema. It must not be able to grant one."""
 
     def test_the_cookie_is_signed_rather_than_a_bare_schema_name(self):
-        response = self.anon().post(LOGIN_URL, {"email": "admin@alpha.ca", "password": PASSWORD})
+        response = self.anon().get(self.link_for(self.alpha))
 
         value = self.cookie_value(response)
         self.assertNotEqual(value, "alpha")
@@ -295,20 +323,18 @@ class LookupTests(SharedHostTestCase):
         """
         Ordered by church name, so the outcome is stable rather than row-order luck.
 
-        Recorded in BUILD_NOTES.md as a known limitation: one address should belong to
-        one church.
+        This is no longer the limitation it was. The password form had to *pick* one of
+        these and picked the first, leaving the other account quietly unreachable;
+        recovery issues a link into each, so both remain usable.
         """
         with tenant_context(self.beta):
             get_user_model().objects.create_user(
-                email="admin@alpha.ca", password=PASSWORD, first_name="Also", last_name="Alex"
+                email="admin@alpha.ca", first_name="Also", last_name="Alex"
             )
 
         targets = find_login_targets("admin@alpha.ca")
 
         self.assertEqual([t.schema_name for t in targets], ["alpha", "beta"])
-
-        response = self.anon().post(LOGIN_URL, {"email": "admin@alpha.ca", "password": PASSWORD})
-        self.assertEqual(self.cookie_value(response), sign_schema_name("alpha"))
 
     def test_the_blind_index_differs_per_schema(self):
         """
@@ -375,12 +401,18 @@ class PreSignInDisclosureTests(SharedHostTestCase):
 
         self.assertNotIn("Alpha", title)
 
-    def test_the_second_factor_pages_do_not_name_the_church(self):
+    def test_the_recovery_pages_do_not_name_the_church(self):
         client = self.pinned_to_alpha()
-        client.post(LOGIN_URL, {"email": "admin@alpha.ca", "password": PASSWORD})
 
-        # Password accepted, TOTP enrolment pending — still not signed in.
-        response = client.get("/accounts/totp/required/")
+        for url in (RECOVER_URL, "/accounts/link/rubbish/"):
+            with self.subTest(url=url):
+                response = client.get(url)
+                self.assertNotContains(response, "Alpha Church", status_code=response.status_code)
+
+    def test_asking_for_a_link_does_not_name_the_church(self):
+        client = self.pinned_to_alpha()
+
+        response = client.post(RECOVER_URL, {"email": "admin@alpha.ca"})
 
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Alpha Church")
@@ -404,8 +436,8 @@ class AuditOutsideATenantTests(SharedHostTestCase):
     """
     The audit trail is a tenant table, and sign-in happens before a tenant is known.
 
-    Before shared hosting this only bit the operator's console; now every mistyped
-    password on the shared page goes through the public schema, so recording has to
+    Before shared hosting this only bit the operator's console; now every refused
+    sign-in link on the shared page goes through the public schema, so recording has to
     degrade to a log line instead of raising ``UndefinedTable``.
     """
 
@@ -427,8 +459,17 @@ class AuditOutsideATenantTests(SharedHostTestCase):
             self.assertIsNotNone(event)
             self.assertTrue(AuditEvent.objects.filter(pk=event.pk).exists())
 
-    def test_a_failed_sign_in_on_the_shared_page_does_not_error(self):
-        response = self.anon().post(LOGIN_URL, {"email": "admin@alpha.ca", "password": "wrong"})
+    def test_a_refused_link_on_the_shared_page_does_not_error(self):
+        """
+        The live path to this: ``link_consume`` audits a failure while still bound to
+        ``public``, because a bad payload never reveals which church to bind to.
+        """
+        response = self.anon().get("/accounts/link/not-a-real-payload/")
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_asking_for_a_link_on_the_shared_page_does_not_error(self):
+        response = self.anon().post(RECOVER_URL, {"email": "nobody@nowhere.ca"})
 
         self.assertEqual(response.status_code, 200)
 
@@ -439,20 +480,24 @@ class SubdomainStillWorksTests(SharedHostTestCase):
     def test_a_church_hostname_still_resolves_without_any_cookie(self):
         client = Client(HTTP_HOST="alpha.testserver")
         with tenant_context(self.alpha):
-            client.force_login(get_user_model().objects.get(email_index__isnull=False))
+            user = get_user_model().objects.get(email_index__isnull=False)
+            self.give_passkey(user)
+            client.force_login(user)
 
         response = client.get("/")
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Alpha Church")
 
-    def test_signing_in_on_a_church_hostname_sets_no_cookie(self):
-        response = Client(HTTP_HOST="alpha.testserver").post(
-            LOGIN_URL, {"email": "admin@alpha.ca", "password": PASSWORD}
-        )
+    def test_a_link_used_on_a_church_hostname_still_sets_its_cookie(self):
+        """
+        Harmless, and simpler than suppressing it. The cookie is host-only, so one set
+        on ``alpha.testserver`` is never sent to the shared address in the first place.
+        """
+        response = Client(HTTP_HOST="alpha.testserver").get(self.link_for(self.alpha))
 
         self.assertEqual(response.status_code, 302)
-        self.assertIsNone(self.cookie_value(response))
+        self.assertEqual(self.cookie_value(response), sign_schema_name("alpha"))
 
     def test_an_unknown_hostname_is_still_refused(self):
         response = Client(HTTP_HOST="stray.testserver").get("/")

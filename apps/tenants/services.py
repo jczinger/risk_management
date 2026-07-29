@@ -50,6 +50,9 @@ class ProvisionResult:
     dek_b64: str
     dek_fingerprint: str
     seeded_requirements: int
+    #: The first admin's single-use sign-in link. Shown once, then dropped — like the
+    #: DEK above it, and for the same reason: it is a credential, not a record.
+    invite_url: str = ""
 
 
 @transaction.atomic
@@ -61,7 +64,6 @@ def provision_church(
     admin_email: str,
     admin_first_name: str = "",
     admin_last_name: str = "",
-    admin_password: str | None = None,
     document_mode: str = DocumentMode.STORE,
     contact_name: str = "",
     contact_email: str = "",
@@ -76,7 +78,8 @@ def provision_church(
     """
     # Imported here: these models live in the tenant schema and importing them at
     # module scope would create a circular dependency through apps.core.
-    from apps.accounts.models import User
+    from apps.accounts.links import issue_link
+    from apps.accounts.models import LinkPurpose, User
     from apps.core.models import AuditAction
     from apps.requirements.seed import seed_default_template
 
@@ -119,7 +122,6 @@ def provision_church(
     with schema_context(schema_name), override_key(dek):
         admin = User.objects.create_user(
             email=admin_email,
-            password=admin_password,  # None ⇒ passkey-only account
             first_name=admin_first_name.strip(),
             last_name=admin_last_name.strip(),
             is_active=True,
@@ -150,8 +152,11 @@ def provision_church(
             entity_id=admin.pk,
             entity_label=admin.get_full_name() or "first admin",
             summary="First screening administrator created",
-            detail={"passwordless": admin_password is None},
         )
+
+        # Issued inside the schema context: the payload carries the schema name read
+        # off the connection, so minting it outside would point the link at public.
+        _, invite_url = issue_link(admin, LinkPurpose.INVITE)
 
     logger.info(
         "Provisioned church schema=%s hostname=%s key_fingerprint=%s seeded=%d",
@@ -167,6 +172,7 @@ def provision_church(
         admin_email=admin_email,
         dek_b64=encode_key(dek),
         dek_fingerprint=tenant.dek_fingerprint,
+        invite_url=invite_url,
         seeded_requirements=seeded,
     )
 

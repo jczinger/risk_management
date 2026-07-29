@@ -1,0 +1,21 @@
+{% if church_name %}{{ church_name }} — v{% else %}V{% endif %}olunteer Management System
+
+Hello {{ user.get_short_name|default:"there" }},
+
+An account has been created for you{% if church_name %} at {{ church_name }}{% endif %}, to manage
+volunteer screening records.
+
+Open this link to sign in and set up your passkey:
+
+{{ url }}
+
+The link works once and expires in {{ expires_in }}. Setting up a passkey takes a few
+seconds — your fingerprint, your face, or your device PIN — and it is how you will sign
+in from then on. There is no password to choose or remember.
+
+If the link has already expired, ask for a new one from the sign-in page.
+
+--
+If you were not expecting this, you can ignore it. Nobody can use the link but you, and
+it stops working shortly. This system holds volunteers' personal information and every
+sign-in is logged.

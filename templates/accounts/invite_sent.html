@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% comment %}
+Shown once, straight after an administrator is created. The link is a credential, so it
+is never stored for later display and never reachable by reloading — leaving this page
+means minting a fresh one from the sign-in page.
+{% endcomment %}
+
+{% block title %}Administrator added{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ new_admin.get_full_name }} has been added</h1>
+    <p class="lede">{{ new_admin.email }}</p>
+  </div>
+</div>
+
+{% if emailed %}
+  <div class="callout callout--ok">
+    <p class="mb0">Their sign-in link has been emailed to them.</p>
+  </div>
+{% else %}
+  <div class="callout callout--warn">
+    <p class="mb0">
+      <strong>The email could not be sent.</strong> Copy the link below and give it to
+      them another way.
+    </p>
+  </div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head">
+    <h2>Their sign-in link</h2>
+    <span class="badge badge--info">Shown once</span>
+  </div>
+  <div style="padding: 0 1.25rem 1.25rem">
+    <p class="muted">
+      Valid for {{ expires_in }}, and it works once. Opening it signs them in and takes
+      them straight to registering a passkey, which is how they will sign in after that.
+    </p>
+
+    <textarea id="invite-url" class="mono" rows="3" readonly
+              style="width:100%">{{ url }}</textarea>
+    <button type="button" class="btn mt1" id="copy-invite">Copy the link</button>
+    <span id="copy-status" class="small muted" role="status" aria-live="polite"></span>
+
+    <p class="small muted mt1 mb0">
+      This page cannot show it again. If it is lost or expires, they can ask for a new
+      one from the sign-in page.
+    </p>
+  </div>
+</div>
+
+<div class="actions">
+  <a class="btn btn--primary" href="{% url 'accounts:admin_list' %}">Done</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById("copy-invite").addEventListener("click", function () {
+    var field = document.getElementById("invite-url");
+    var status = document.getElementById("copy-status");
+    field.select();
+    // execCommand is deprecated but is the only path that works without a secure
+    // context, which a self-hosted install may well not have on an internal network.
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    status.textContent = ok ? "Copied." : "Press Ctrl+C to copy.";
+  });
+</script>
+{% endblock %}

@@ -131,6 +131,10 @@ class SecurityHeaderTests(TenantTestCase):
         from django.urls import reverse
 
         user = self.make_admin()
+        # With no passkey the enrolment gate returns a redirect during the request
+        # phase, short-circuiting before CSRF is ever checked — so the assertion below
+        # would pass for entirely the wrong reason.
+        self.make_passkey(user)
         client = Client(HTTP_HOST=self.TEST_DOMAIN, enforce_csrf_checks=True)
         client.force_login(user)
 

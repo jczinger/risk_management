@@ -107,6 +107,11 @@ class AuditAction(models.TextChoices):
     LOGIN = "login", "Signed in"
     LOGIN_FAILED = "login_failed", "Sign-in failed"
     LOGOUT = "logout", "Signed out"
+    # Their own actions rather than generic sign-ins: a link is the only way into an
+    # account without a passkey, so "who was handed one, and did they spend it?" is
+    # exactly the question someone filters the trail for after a suspected takeover.
+    LINK_ISSUED = "link_issued", "Sign-in link issued"
+    LINK_USED = "link_used", "Sign-in link used"
     CRC_RECORDED = "crc_recorded", "Criminal record check recorded"
     DISQUALIFIED = "disqualified", "Permanently disqualified"
     OVERRIDE = "override", "Leadership override recorded"

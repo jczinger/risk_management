@@ -12,10 +12,6 @@ ALLOWED_HOSTS = ["*"]
 # Fixed, obviously-fake key so encryption round-trip tests are reproducible.
 PLATFORM_MASTER_KEY = base64.b64encode(b"vms-test-master-key-32-bytes--!!").decode()
 
-# Argon2 is deliberately slow; tests don't need it.
-PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
-AUTH_PASSWORD_VALIDATORS = []
-
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
 
@@ -23,6 +19,8 @@ EMAIL_PROVIDER = "locmem"
 
 WEBAUTHN_RP_ID = "testserver"
 VMS_BASE_DOMAIN = "testserver"
+VMS_LINK_SCHEME = "http"
+VMS_LINK_HOST = "testserver"
 
 SECURE_SSL_REDIRECT = False
 SESSION_COOKIE_SECURE = False

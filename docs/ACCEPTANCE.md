@@ -2,7 +2,7 @@
 
 Every criterion, how it was verified, and where to re-run that verification.
 
-**Automated:** 390 tests, 86% statement coverage of `apps/`.
+**Automated:** 545 tests, 86% statement coverage of `apps/`.
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -31,24 +31,38 @@ Two churches are really provisioned, then isolation is attacked from several dir
 - A request to an unmapped hostname is refused (404), not shown the public schema.
 - A session cookie issued by one church is not honoured by another.
 
-## 2. Admin logs in with a passkey; fallback password+TOTP works; passwordless-only account possible
+## 2. ~~Admin logs in with a passkey; fallback password+TOTP works; passwordless-only account possible~~
+
+**Superseded 29 July 2026**, at the product owner's direction. Password and TOTP were removed from
+the system entirely; the reasoning and what was traded away are in `BUILD_NOTES.md` §1.20. Kept
+here struck through rather than deleted, so the criterion is visibly *changed* rather than quietly
+missing.
+
+## 2. A passkey is the only way to sign in; a single-use link covers first sign-in and recovery
 
 **Status: passing.**
 
-`apps/accounts/tests/test_auth.py` — 42 tests.
+`apps/accounts/tests/test_auth.py`, `test_login_links.py`, `test_forced_enrolment.py` — 67 tests.
 
-- **Passkey:** challenge issuance, verification, sign-in, sign-counter advance, single-use
-  challenges, five-minute expiry, unknown-credential refusal, deactivated account and
-  deactivated passkey both refused. A passkey login is asserted **not** to prompt for TOTP.
-- **Password + TOTP:** a correct password alone does not sign anyone in; it leads to the second
-  factor. An account with a password but no authenticator app is forced through enrolment first.
-  Full password → TOTP → signed-in path is tested, as is a wrong code, an expired pending step,
-  and the clock-skew window.
-- **Passwordless:** `test_an_account_can_exist_with_no_usable_password` and
-  `test_a_passwordless_account_cannot_be_signed_into_with_a_password`.
-- Argon2id confirmed against the raw column; TOTP secrets confirmed encrypted at rest.
-- Lockout guards: the last passkey cannot be removed without a working fallback; TOTP cannot be
-  removed from a password-only account; the last active admin cannot be deactivated.
+- **Passkey:** challenge issuance, verification, sign-in in one step, sign-counter advance,
+  single-use challenges, five-minute expiry, unknown-credential refusal, deactivated account and
+  deactivated passkey both refused.
+- **Links:** single use, two independent expiry guards (the signer's `max_age` *and* the stored
+  `expires_at`, each tested with the other neutralised), tampered payload, unknown token,
+  deactivated account, suspended church. Every failure is asserted to render a byte-identical
+  page, so the form cannot be used to discover who has an account.
+- **Cross-schema:** a *validly signed* payload with the schema name swapped finds no token; a
+  link binds the request to its own church; one address at two churches yields one link each.
+- **Forced enrolment:** an account with no passkey is redirected to enrolment from every page,
+  not merely the first; signing out and the WebAuthn endpoints stay reachable so nobody is
+  trapped; registering a passkey releases the gate; with the key-backup gate also pending,
+  enrolment goes first.
+- **Recovery is announced:** using a recovery link emails the church's other administrators and
+  writes a `link_used` audit entry. An invite link notifies nobody.
+- **At rest:** only the SHA-256 of a link is stored, and a live link is asserted absent from a
+  `pg_dump`. Every account holds a *distinct* unusable password marker — including after the
+  removal migration, which is called directly by a test because it otherwise runs on no rows.
+- **Rate limits:** both WebAuthn endpoints per IP; the recovery form per address and per IP.
 
 The WebAuthn *cryptographic* verification is stubbed, because producing a real assertion requires
 an authenticator to sign a challenge and cannot be done in-process. Everything around it —
@@ -328,6 +342,10 @@ domains are separated, and that re-saving a model does not double-encrypt.
 Confirmed absent: in-app forms and e-signature; Markdown role-description editing, versioning or
 acknowledgement tracking; volunteer or pastor logins; district rollups; SSO; SMS; BC-portal or
 PtP-training integrations; billing; scheduling; disciplinary tracking.
+
+Email-based account recovery, added in §1.20, is on none of these lists — that list forbids SSO,
+volunteer and pastor logins, and SMS, and says nothing about how a screening admin gets back into
+their own account.
 
 Schema room was left for each without writing any of it — see `BUILD_NOTES.md` §1.12.
 

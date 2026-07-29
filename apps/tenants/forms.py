@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from django import forms
-from django.contrib.auth.password_validation import validate_password
 
 from .models import DocumentMode, Domain, Tenant, validate_lead_days, validate_schema_name
 
@@ -66,18 +65,6 @@ class ProvisionChurchForm(forms.Form):
         label="Email address",
         help_text="They sign in with this address and receive renewal reminders.",
     )
-    admin_password = forms.CharField(
-        label="Temporary password",
-        required=False,
-        strip=False,
-        widget=forms.PasswordInput(render_value=False),
-        help_text=(
-            "Optional. Leave blank for a passkey-only account — the admin then "
-            "registers a passkey from the sign-in page. If set, they will also need "
-            "to enrol a TOTP app."
-        ),
-    )
-
     seed_template = forms.BooleanField(
         label="Seed the Plan to Protect requirement template",
         required=False,
@@ -94,12 +81,6 @@ class ProvisionChurchForm(forms.Form):
 
     def clean_domain_name(self):
         return (self.cleaned_data.get("domain_name") or "").strip().lower()
-
-    def clean_admin_password(self):
-        password = self.cleaned_data.get("admin_password") or ""
-        if password:
-            validate_password(password)
-        return password
 
     def clean(self):
         cleaned = super().clean()

@@ -15,6 +15,9 @@ CSRF_TRUSTED_ORIGINS = env.list(
 
 VMS_BASE_DOMAIN = env("VMS_BASE_DOMAIN", default="localhost")
 WEBAUTHN_RP_ID = env("WEBAUTHN_RP_ID", default="localhost")
+VMS_LINK_SCHEME = env("VMS_LINK_SCHEME", default="http")
+# runserver's port, so an emailed link is clickable in development.
+VMS_LINK_HOST = env("VMS_LINK_HOST", default="localhost:8000")
 
 EMAIL_PROVIDER = env("EMAIL_PROVIDER", default="console")
 

@@ -3,27 +3,20 @@
 from __future__ import annotations
 
 from django import forms
-from django.contrib.auth.password_validation import validate_password
 
 from apps.core.blind_index import email_index, normalise_email
 
 from .models import User
-from .tenant_login import authenticate_across_schemas
 
 
-class EmailPasswordForm(forms.Form):
+class RecoveryRequestForm(forms.Form):
     """
-    The fallback sign-in step.
+    Ask for a fresh sign-in link.
 
-    Success here does **not** sign anyone in — it only establishes that the password is
-    right, after which the TOTP step runs. The authenticated user is stashed on the
-    form for the view to pick up.
-
-    On the shared hostname this step also decides *which church* the person belongs to,
-    which is why validating it has the side effect of binding the connection to that
-    church's schema. That is unusual for a form, and deliberate: the switch has to
-    happen before the session is written, and the session is written after the view
-    returns. ``self.target`` records where it landed so the view can set the cookie.
+    Only an address, because there is nothing else to ask for — this is the path taken
+    by somebody whose passkey is on a phone at the bottom of a lake. The view never
+    reveals whether the address matched, so this form has nothing to validate beyond
+    the shape of it.
     """
 
     email = forms.EmailField(
@@ -32,76 +25,9 @@ class EmailPasswordForm(forms.Form):
             attrs={"autocomplete": "username", "autofocus": True, "autocapitalize": "none"}
         ),
     )
-    password = forms.CharField(
-        label="Password",
-        strip=False,
-        widget=forms.PasswordInput(attrs={"autocomplete": "current-password"}),
-    )
 
-    #: Deliberately identical for a wrong address and a wrong password, so the form
-    #: cannot be used to discover who has an account.
-    GENERIC_ERROR = "That email address and password combination was not recognised."
-
-    def __init__(self, request=None, *args, **kwargs):
-        self.request = request
-        self.user = None
-        self.target = None
-        super().__init__(*args, **kwargs)
-
-    def clean(self):
-        cleaned = super().clean()
-        email = normalise_email(cleaned.get("email") or "")
-        password = cleaned.get("password") or ""
-
-        if not email or not password:
-            return cleaned
-
-        resolved = authenticate_across_schemas(self.request, email, password)
-
-        # One message covers every failure: no such address, wrong password, deactivated
-        # account, and suspended church. That is deliberate — a distinct "your account is
-        # deactivated" reply would confirm the address exists to anyone who guessed it.
-        # The same reasoning applies across churches: the form must not reveal that an
-        # address is known at some *other* church either.
-        if resolved is None:
-            raise forms.ValidationError(self.GENERIC_ERROR, code="invalid_login")
-
-        self.user = resolved.user
-        self.target = resolved.target
-        return cleaned
-
-
-class TOTPForm(forms.Form):
-    """The second-factor step of the fallback path."""
-
-    code = forms.CharField(
-        label="Six-digit code",
-        max_length=8,
-        widget=forms.TextInput(
-            attrs={
-                "autocomplete": "one-time-code",
-                "inputmode": "numeric",
-                "pattern": "[0-9]*",
-                "autofocus": True,
-                "placeholder": "000000",
-            }
-        ),
-    )
-
-    def clean_code(self):
-        return (self.cleaned_data["code"] or "").strip().replace(" ", "")
-
-
-class TOTPEnrolForm(TOTPForm):
-    """Confirms the authenticator app actually stored the secret."""
-
-    code = forms.CharField(
-        label="Enter the code your app shows now",
-        max_length=8,
-        widget=forms.TextInput(
-            attrs={"autocomplete": "one-time-code", "inputmode": "numeric", "autofocus": True}
-        ),
-    )
+    def clean_email(self):
+        return normalise_email(self.cleaned_data["email"])
 
 
 class PasskeyLabelForm(forms.Form):
@@ -115,47 +41,13 @@ class PasskeyLabelForm(forms.Form):
     )
 
 
-class SetPasswordForm(forms.Form):
-    """Set or change the fallback password."""
-
-    new_password1 = forms.CharField(
-        label="New password",
-        strip=False,
-        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
-        help_text="At least 12 characters.",
-    )
-    new_password2 = forms.CharField(
-        label="Confirm new password",
-        strip=False,
-        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
-    )
-
-    def __init__(self, user, *args, **kwargs):
-        self.user = user
-        super().__init__(*args, **kwargs)
-
-    def clean(self):
-        cleaned = super().clean()
-        first = cleaned.get("new_password1")
-        second = cleaned.get("new_password2")
-        if first and second and first != second:
-            self.add_error("new_password2", "The two passwords do not match.")
-        elif first:
-            validate_password(first, self.user)
-        return cleaned
-
-    def save(self):
-        self.user.set_password(self.cleaned_data["new_password1"])
-        self.user.save(update_fields=["password"])
-        return self.user
-
-
 class AdminInviteForm(forms.Form):
     """
     Add another screening admin to this church.
 
     All admins have equal permissions within their church (Build Spec §2), so there is
-    no role to choose. A blank password creates a passkey-only account.
+    no role to choose. Creating the account mints a single-use link; there is nothing
+    to set here beyond who they are.
     """
 
     first_name = forms.CharField(max_length=100)
@@ -163,28 +55,12 @@ class AdminInviteForm(forms.Form):
     email = forms.EmailField(
         help_text="They will sign in with this address and receive renewal reminders."
     )
-    password = forms.CharField(
-        label="Temporary password",
-        required=False,
-        strip=False,
-        widget=forms.PasswordInput(render_value=False),
-        help_text=(
-            "Optional. Leave blank so they set up a passkey instead — the more secure "
-            "option. If set, they must also enrol an authenticator app."
-        ),
-    )
 
     def clean_email(self):
         email = normalise_email(self.cleaned_data["email"])
         if User.objects.filter(email_index=email_index(email)).exists():
             raise forms.ValidationError("An administrator with that address already exists.")
         return email
-
-    def clean_password(self):
-        password = self.cleaned_data.get("password") or ""
-        if password:
-            validate_password(password)
-        return password
 
 
 class AdminProfileForm(forms.ModelForm):

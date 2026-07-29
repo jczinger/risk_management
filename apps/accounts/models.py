@@ -13,9 +13,17 @@ Email handling deserves a note. The address is *encrypted*, per PRD §5 and the
 acceptance criterion that a ``pg_dump`` show no readable email. Since login has to
 find a user by address, a keyed blind index (``email_index``) sits alongside it and
 carries the uniqueness constraint. See :mod:`apps.core.blind_index`.
+
+Nobody here has a password. Every account is created with an unusable one and signs in
+with a passkey; :class:`LoginLink` covers the two moments a passkey is not available
+yet — the first sign-in, and recovery after losing one. ``AbstractBaseUser`` is still
+the base class because it supplies ``last_login`` and the session-auth plumbing, so the
+``password`` column survives holding Django's unusable marker. See BUILD_NOTES §1.20.
 """
 
 from __future__ import annotations
+
+import logging
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.core.exceptions import ValidationError
@@ -24,6 +32,17 @@ from django.utils import timezone
 
 from apps.core.blind_index import email_index, normalise_email
 from apps.core.fields import EncryptedCharField, EncryptedEmailField
+
+logger = logging.getLogger("vms.accounts")
+
+
+def _warn_if_password(password: str | None) -> None:
+    """Say so loudly when a caller still thinks passwords work."""
+    if password:
+        logger.warning(
+            "A password was supplied when creating a user and has been ignored; "
+            "accounts sign in with a passkey."
+        )
 
 
 class UserManager(BaseUserManager):
@@ -39,7 +58,7 @@ class UserManager(BaseUserManager):
     def get_by_natural_key(self, username: str):
         return self.get(email_index=email_index(username or ""))
 
-    def _create(self, email: str, password: str | None, **extra):
+    def _create(self, email: str, **extra):
         email = normalise_email(email)
         if not email:
             raise ValueError("An email address is required.")
@@ -47,34 +66,42 @@ class UserManager(BaseUserManager):
         # Set explicitly rather than relying on save(): the index must be present
         # before the unique constraint is checked.
         user.email_index = email_index(email)
-        if password:
-            user.set_password(password)
-        else:
-            # Passwordless-by-design account: a passkey is the only way in. Django
-            # renders an unusable hash, which set_password(None) produces.
-            user.set_unusable_password()
+        # Every account is passkey-only. Django renders an unusable hash, which nothing
+        # can ever match, so the password column exists but is never a way in.
+        user.set_unusable_password()
         user.full_clean(exclude=["password"], validate_unique=False)
         user.save(using=self._db)
         return user
 
     def create_user(self, email: str, password: str | None = None, **extra):
+        """
+        Create a screening admin.
+
+        ``password`` is accepted and **ignored**: Django's own plumbing passes it
+        positionally in places we do not control. Rejecting it would turn a no-op into a
+        crash; silently honouring it would put a working password back into a system
+        that no longer has a password sign-in to check it against.
+        """
+        _warn_if_password(password)
         extra.setdefault("is_staff", False)
         extra.setdefault("is_superuser", False)
-        return self._create(email, password, **extra)
+        return self._create(email, **extra)
 
     def create_superuser(self, email: str, password: str | None = None, **extra):
         """
         Create a platform super-admin.
 
         Intended for the ``public`` schema. Called by ``createsuperuser`` and by the
-        ``bootstrap_superadmin`` management command.
+        ``bootstrap_superadmin`` management command. ``password`` is ignored, as above —
+        use ``manage.py issue_magic_link`` to get the new account signed in once.
         """
+        _warn_if_password(password)
         extra.setdefault("is_staff", True)
         extra.setdefault("is_superuser", True)
         extra.setdefault("is_active", True)
         if not extra["is_staff"] or not extra["is_superuser"]:
             raise ValueError("A super-admin must have is_staff and is_superuser set.")
-        return self._create(email, password, **extra)
+        return self._create(email, **extra)
 
 
 class User(AbstractBaseUser, PermissionsMixin):
@@ -104,21 +131,6 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     date_joined = models.DateTimeField(default=timezone.now)
     last_login_at = models.DateTimeField(null=True, blank=True)
-
-    # --- Second factor state ---------------------------------------------
-    #
-    # TOTP is the fallback path's second factor, required whenever a password is
-    # used. A passkey already proves possession of the device, so a passkey login
-    # does not additionally prompt for TOTP.
-    totp_secret = EncryptedCharField(
-        max_length=64,
-        blank=True,
-        default="",
-        editable=False,
-        verbose_name="TOTP secret",
-        help_text="Base32 shared secret. Encrypted; only ever read to verify a code.",
-    )
-    totp_confirmed_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     objects = UserManager()
 
@@ -175,23 +187,17 @@ class User(AbstractBaseUser, PermissionsMixin):
         return self.passkeys.filter(is_active=True).exists()
 
     @property
-    def has_totp(self) -> bool:
-        return bool(self.totp_secret) and self.totp_confirmed_at is not None
-
-    @property
-    def is_passwordless(self) -> bool:
-        """True when the only way into this account is a passkey."""
-        return not self.has_usable_password()
-
-    @property
     def can_remove_last_passkey(self) -> bool:
         """
-        Guard against locking oneself out.
+        Always true, now that a sign-in link is the way back in.
 
-        Removing the final passkey is only safe if a password *and* a confirmed TOTP
-        device remain as a way back in.
+        This used to require a working password *and* a confirmed authenticator app,
+        because removing the final passkey with neither was a permanent lockout. With
+        :class:`LoginLink` there is no such state: an account with no passkey at all
+        can recover itself by email and enrol a new one. Kept as a property rather
+        than deleted so the guard has somewhere to live if that ever stops being true.
         """
-        return self.has_usable_password() and self.has_totp
+        return True
 
 
 class Passkey(models.Model):
@@ -271,6 +277,66 @@ class WebAuthnChallenge(models.Model):
     @property
     def is_expired(self) -> bool:
         return (timezone.now() - self.created_at).total_seconds() > 300
+
+    @property
+    def is_usable(self) -> bool:
+        return self.consumed_at is None and not self.is_expired
+
+    def consume(self) -> None:
+        self.consumed_at = timezone.now()
+        self.save(update_fields=["consumed_at"])
+
+
+class LinkPurpose(models.TextChoices):
+    INVITE = "invite", "First sign-in"
+    RECOVERY = "recovery", "Account recovery"
+
+
+class LoginLink(models.Model):
+    """
+    A single-use link that signs somebody in once, so they can enrol a passkey.
+
+    This is the only way into an account that does not involve a passkey, and it exists
+    for exactly two moments: the first sign-in after an account is created, and the
+    recovery that follows a lost passkey or a lost device.
+
+    Only the SHA-256 of the secret is stored. A database dump therefore yields no usable
+    link, which matters more here than for most tables — a live link is a bearer token
+    for an administrator account. The hash needs no encryption: it is derived from 256
+    bits of randomness and identifies nobody, the same argument that leaves
+    ``Passkey.credential_id`` in plaintext.
+
+    Expiry is recorded on the row as well as being baked into the signed payload. The two
+    are set from the same value, so they cannot disagree; keeping the row copy means an
+    administrator reading the table can see when a link dies, and a clock change on the
+    signer cannot silently extend one.
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="login_links")
+
+    #: SHA-256 hex of the secret handed out in the URL. Never the secret itself.
+    token_hash = models.CharField(max_length=64, unique=True, editable=False, db_index=True)
+    purpose = models.CharField(max_length=16, choices=LinkPurpose.choices)
+
+    #: The administrator who issued it. Null when it came from the command line.
+    issued_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+
+    created_at = models.DateTimeField(default=timezone.now, editable=False)
+    expires_at = models.DateTimeField(editable=False)
+    consumed_at = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ("-created_at",)
+        verbose_name = "sign-in link"
+
+    def __str__(self):
+        return f"{self.get_purpose_display()} link for {self.user_id}"
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
 
     @property
     def is_usable(self) -> bool:

@@ -19,8 +19,8 @@
   <div class="callout callout--info">
     <h3>Add a passkey</h3>
     <p class="mb0">
-      Passkeys are the primary way into this system: faster than a password and code, and
-      not phishable. Register one on each device you use.
+      A passkey is the only way to sign in. Register one on each device you use — a
+      second one is what saves you a trip through email when the first is unavailable.
     </p>
   </div>
 {% endif %}
@@ -71,50 +71,18 @@
 
 <div class="card">
   <div class="card-head">
-    <h2>Authenticator app</h2>
-    <span class="badge {% if user.has_totp %}badge--ok{% else %}badge--muted{% endif %}">
-      {% if user.has_totp %}Set up{% else %}Not set up{% endif %}
-    </span>
+    <h2>If you lose a passkey</h2>
   </div>
   <div style="padding: 0 1.25rem 1.25rem">
-    {% if user.has_totp %}
-      <p class="muted">
-        Set up {{ user.totp_confirmed_at|date:"j F Y" }}. Required whenever you sign in
-        with a password.
-      </p>
-      <form method="post" action="{% url 'accounts:totp_disable' %}">
-        {% csrf_token %}
-        <button type="submit" class="btn">Remove authenticator app</button>
-      </form>
-    {% else %}
-      <p class="muted">
-        Only needed if you sign in with a password. If you use a passkey, the passkey is
-        already both factors.
-      </p>
-      <a class="btn" href="{% url 'accounts:totp_setup' %}">Set up an authenticator app</a>
-    {% endif %}
+    <p class="muted mb0">
+      Ask for a sign-in link from the sign-in page and register a new one. There is no
+      password to fall back on — your email address is the way back in, so keep it one
+      only you can read. Registering a passkey on a second device now means you are
+      never waiting on an email.
+    </p>
   </div>
 </div>
 
-<div class="card">
-  <div class="card-head">
-    <h2>Password</h2>
-    <span class="badge {% if user.is_passwordless %}badge--info{% else %}badge--muted{% endif %}">
-      {% if user.is_passwordless %}Passkey-only account{% else %}Set{% endif %}
-    </span>
-  </div>
-  <div style="padding: 0 1.25rem 1.25rem">
-    {% if user.is_passwordless %}
-      <p class="muted">
-        This account has no password — a passkey is the only way in, which is the most
-        secure arrangement. You can add a password as a fallback if you want one.
-      </p>
-    {% endif %}
-    <a class="btn" href="{% url 'accounts:password_change' %}">
-      {% if user.is_passwordless %}Add a password{% else %}Change password{% endif %}
-    </a>
-  </div>
-</div>
 {% endblock %}
 
 {% block scripts %}

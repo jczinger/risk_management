@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% comment %}
+One page for every way a link can fail — expired, already used, tampered with, or never
+real. Saying which would tell whoever is holding it whether the account exists.
+{% endcomment %}
+
+{% block title %}That link is no longer valid{% endblock %}
+{% block main_class %}class="narrow"{% endblock %}
+{% block nav %}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>That link is no longer valid</h1>
+  </div>
+</div>
+
+<div class="card">
+  <p>
+    Sign-in links work once and expire soon after they are sent. This one has been used,
+    has run out, or was not complete — a link split across two lines by an email client
+    will do it.
+  </p>
+  <a class="btn btn--primary btn--block" href="{% url 'accounts:recover' %}">
+    Send me a new one
+  </a>
+</div>
+
+<p class="small faint">
+  <a href="{% url 'accounts:login' %}">Back to sign in</a>
+</p>
+{% endblock %}

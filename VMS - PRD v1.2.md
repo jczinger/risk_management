@@ -29,7 +29,7 @@ The foundation plus the full compliance loop, live for multiple churches from da
 
 **Multi-tenant foundation.** Schema-per-tenant via `django-tenants`; a **super-admin console** to onboard and provision churches. Each church's data is isolated in its own Postgres schema.
 
-**Authentication.** Passwordless **passkey as the primary login**; password + TOTP as fallback. Multiple screening admins per church.
+**Authentication.** Passwordless **passkey as the primary login**; password + TOTP as fallback. Multiple screening admins per church. *(Amended 2026-07-29: passkeys only; a single-use emailed link covers first sign-in and recovery, and password + TOTP were removed. See BUILD_NOTES.md §1.20.)*
 
 **Org model.** **Departments → Roles → Volunteers.** Directors and secretaries are leadership-flagged roles (0..n each per department), screened like any Ministry Personnel. Roles belong to exactly one department.
 
@@ -89,7 +89,7 @@ BC criminal-record-check portal and PtP training integrations; SMS; scheduling; 
 
 - **Stack:** Django + PostgreSQL; HTMX UI; Nginx Proxy Manager terminates SSL in front.
 - **Multi-tenancy:** schema-per-tenant via `django-tenants`.
-- **Auth:** passkey primary; password + TOTP fallback; per-tenant SSO is Stage 3.
+- **Auth:** passkey primary; password + TOTP fallback; per-tenant SSO is Stage 3. *(Amended 2026-07-29 — passkeys only, emailed link for recovery; see BUILD_NOTES.md §1.20.)*
 - **Notifications:** ACS Email, Canada geography, `no-reply@` on the app's own domain (SPF/DKIM/DMARC), behind a provider abstraction. No SMS.
 - **Deployment (decided 2026-07-23):** **Docker Compose** — app, Postgres, background worker — one exposed port behind NPM on Josh's server; eventual Azure migration.
 - **Hosting & residency:** everything stays in Canada.

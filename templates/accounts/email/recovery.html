@@ -1,0 +1,52 @@
+{% comment %}
+The recovery link. The "was this not you?" warning is the point of the email as much as
+the link is — with no password and no second factor, a mailbox is the whole of the
+account's security, and the owner is the only one who can notice it being used.
+{% endcomment %}
+<div style="font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 15px; color: #16202c; line-height: 1.5; max-width: 640px;">
+
+  <h2 style="margin: 0 0 4px; font-size: 19px; color: #14496b;">Your sign-in link</h2>
+  <p style="margin: 0 0 20px; color: #4a5a6b; font-size: 14px;">
+    {% if church_name %}{{ church_name }} &middot; {% endif %}Volunteer Management System
+  </p>
+
+  <p style="margin: 0 0 16px;">Hello {{ user.get_short_name|default:"there" }},</p>
+
+  <p style="margin: 0 0 16px;">
+    Somebody asked for a sign-in link for this address{% if church_name %} at
+    <strong>{{ church_name }}</strong>{% endif %}.
+  </p>
+
+  <p style="margin: 0 0 24px;">
+    <a href="{{ url }}"
+       style="display: inline-block; padding: 12px 22px; background: #14496b; color: #ffffff; text-decoration: none; border-radius: 4px; font-weight: 600;">
+      Sign in and register a passkey
+    </a>
+  </p>
+
+  <p style="margin: 0 0 16px; font-size: 14px; color: #4a5a6b;">
+    The link works once and expires in {{ expires_in }}. Any passkeys you already have
+    keep working &mdash; registering another does not remove them.
+  </p>
+
+  <p style="margin: 0 0 24px; font-size: 13px; color: #6b7a8b; word-break: break-all;">
+    If the button does not work, copy this into your browser:<br>{{ url }}
+  </p>
+
+  <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse: collapse; margin-bottom: 16px;">
+    <tr>
+      <td style="padding: 12px 14px; border-left: 3px solid #a4243b; background: #fbeef0; font-size: 14px;">
+        <strong style="color: #a4243b;">If this was not you</strong><br>
+        Ignore this email &mdash; nothing has changed and the link expires shortly. If
+        these keep arriving, tell another administrator at your church: somebody may be
+        trying to reach your account through your mailbox.
+      </td>
+    </tr>
+  </table>
+
+  <hr style="border: none; border-top: 1px solid #eef2f7; margin: 24px 0 12px;">
+  <p style="margin: 0; font-size: 13px; color: #6b7a8b;">
+    Every sign-in is logged. When a recovery link is used, the other administrators at
+    your church are told.
+  </p>
+</div>

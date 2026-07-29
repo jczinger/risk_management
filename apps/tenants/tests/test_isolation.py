@@ -37,6 +37,13 @@ class ProvisioningTestCase(TransactionTestCase):
         super().setUp()
         connection.set_schema_to_public()
         forget_cached_keys()
+        # Rate-limit counters live in LocMemCache, which is per *process*, not per test.
+        # Without this a class that posts the recovery form a few times trips its own
+        # limit partway through and the failure lands on whichever test ran last —
+        # order-dependent, and misleading about which behaviour broke.
+        from django.core.cache import cache
+
+        cache.clear()
 
     def tearDown(self):
         connection.set_schema_to_public()
@@ -66,7 +73,6 @@ class ProvisioningTests(ProvisioningTestCase):
             "admin_email": f"admin@{code}.ca",
             "admin_first_name": "Alex",
             "admin_last_name": "Admin",
-            "admin_password": "ProvisionPass!2026",
         }
         defaults.update(extra)
         return provision_church(**defaults)
@@ -156,16 +162,26 @@ class ProvisioningTests(ProvisioningTestCase):
         result = self._provision(code="MixedCase", domain_name="mixedcase.testserver")
         self.assertEqual(result.tenant.schema_name, "mixedcase")
 
-    def test_passwordless_admin_is_supported(self):
-        """Build Spec §10: a passwordless-only account must be possible."""
-        result = self._provision(admin_password=None)
+    def test_the_first_admin_is_passwordless_and_gets_a_link(self):
+        """
+        Every account is passwordless now — there is no other kind. What replaces the
+        temporary password is a single-use link, minted inside the church's own schema
+        so that the schema name baked into it is the right one.
+        """
+        result = self._provision()
+
+        self.assertIn("/accounts/link/", result.invite_url)
 
         with tenant_context(result.tenant):
-            from apps.accounts.models import User
+            from apps.accounts.models import LinkPurpose, LoginLink, User
 
             admin = User.objects.get()
             self.assertFalse(admin.has_usable_password())
-            self.assertTrue(admin.is_passwordless)
+
+            link = LoginLink.objects.get()
+            self.assertEqual(link.user, admin)
+            self.assertEqual(link.purpose, LinkPurpose.INVITE)
+            self.assertIsNone(link.consumed_at)
 
     def test_seeding_can_be_skipped(self):
         result = self._provision(seed_template=False)
@@ -211,14 +227,12 @@ class TenantIsolationTests(ProvisioningTestCase):
             schema_name="alpha",
             domain_name="alpha.testserver",
             admin_email="admin@alpha.ca",
-            admin_password="AlphaPass!2026",
         )
         self.beta = provision_church(
             name="Beta Church",
             schema_name="beta",
             domain_name="beta.testserver",
             admin_email="admin@beta.ca",
-            admin_password="BetaPass!2026",
         )
 
     def _add_volunteer(self, tenant, first_name, last_name, **extra):
@@ -366,12 +380,14 @@ class TenantIsolationTests(ProvisioningTestCase):
         result.tenant.confirm_key_backup(by="test")
         client = Client(HTTP_HOST=result.domain.domain)
 
-        # force_login writes a session row, and sessions live in the tenant schema — so the
-        # login has to happen with that church bound, exactly as a real request would.
+        # force_login looks the user up, and User is a tenant table — so the login has to
+        # happen with that church bound, exactly as a real request would.
         with tenant_context(result.tenant):
             from apps.accounts.models import User
 
-            client.force_login(User.objects.get())
+            user = User.objects.get()
+            _give_passkey(user)
+            client.force_login(user)
         return client
 
     def test_a_new_church_is_held_at_the_key_backup_gate(self):
@@ -385,7 +401,10 @@ class TenantIsolationTests(ProvisioningTestCase):
         with tenant_context(self.alpha.tenant):
             from apps.accounts.models import User
 
-            client.force_login(User.objects.get())
+            user = User.objects.get()
+            # Past the passkey gate, which sits in front of this one on purpose.
+            _give_passkey(user)
+            client.force_login(user)
 
         self.assertTrue(self.alpha.tenant.key_backup_pending)
 
@@ -429,7 +448,6 @@ class KeyEscrowTests(ProvisioningTestCase):
             schema_name="gamma",
             domain_name="gamma.testserver",
             admin_email="admin@gamma.ca",
-            admin_password="GammaPass!2026",
         )
 
     def test_reimporting_the_correct_key_succeeds_and_data_stays_readable(self):
@@ -491,3 +509,14 @@ class KeyEscrowTests(ProvisioningTestCase):
 
         with self.assertRaises(CommandError):
             call_command("export_tenant_key", "gamma")
+
+
+def _give_passkey(user):
+    """A registered passkey, without the WebAuthn ceremony."""
+    import secrets
+
+    from apps.accounts.models import Passkey
+
+    return Passkey.objects.create(
+        user=user, credential_id=secrets.token_urlsafe(24), public_key=b"not-a-real-key"
+    )
