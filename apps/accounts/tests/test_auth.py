@@ -449,6 +449,47 @@ class AdminManagementTests(TenantTestCase):
         self.assertFalse(second.is_active)
         self.assertTrue(User.objects.filter(pk=second.pk).exists())
 
+    def test_reissuing_a_link_for_someone_with_no_passkey_is_another_invite(self):
+        """
+        The gap this closes: an invite that died before its recipient ever clicked it
+        — forwarded through something that unfurls links, or just clicked twice —
+        used to leave them with no way in until someone ran a management command.
+        """
+        from apps.accounts.models import LinkPurpose, LoginLink
+
+        stuck = self.make_admin(email="stuck@church.ca")
+
+        response = self.client.post(reverse("accounts:admin_reissue_link", args=[stuck.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "/accounts/link/")
+        link = LoginLink.objects.filter(user=stuck).latest("created_at")
+        self.assertEqual(link.purpose, LinkPurpose.INVITE)
+
+    def test_reissuing_a_link_for_someone_with_a_passkey_is_a_recovery(self):
+        from apps.accounts.models import LinkPurpose, LoginLink
+
+        has_one = self.make_admin(email="haskey@church.ca")
+        self.make_passkey(has_one)
+
+        response = self.client.post(reverse("accounts:admin_reissue_link", args=[has_one.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        link = LoginLink.objects.filter(user=has_one).latest("created_at")
+        self.assertEqual(link.purpose, LinkPurpose.RECOVERY)
+
+    def test_reissuing_a_link_for_an_inactive_admin_is_refused(self):
+        from apps.accounts.models import LoginLink
+
+        inactive = self.make_admin(email="gone@church.ca", is_active=False)
+
+        response = self.client.post(
+            reverse("accounts:admin_reissue_link", args=[inactive.pk]), follow=True
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(LoginLink.objects.filter(user=inactive).exists())
+
 
 class CsrfCookieOnSignInTests(TenantTestCase):
     """

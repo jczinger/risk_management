@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 {% comment %}
-Shown once, straight after an administrator is created. The link is a credential, so it
-is never stored for later display and never reachable by reloading — leaving this page
-means minting a fresh one from the sign-in page.
+Shown once, right after a sign-in link is minted — at account creation, or when an
+admin reissues one. The link is a credential, so it is never stored for later display
+and never reachable by reloading — leaving this page means minting another one.
 {% endcomment %}
 
-{% block title %}Administrator added{% endblock %}
+{% block title %}Sign-in link{% endblock %}
 {% block main_class %}class="narrow"{% endblock %}
 
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>{{ new_admin.get_full_name }} has been added</h1>
-    <p class="lede">{{ new_admin.email }}</p>
+    <h1>{% if just_added %}{{ target.get_full_name }} has been added{% else %}A new sign-in link for {{ target.get_full_name }}{% endif %}</h1>
+    <p class="lede">{{ target.email }}</p>
   </div>
 </div>
 
@@ -36,8 +36,13 @@ means minting a fresh one from the sign-in page.
   </div>
   <div style="padding: 0 1.25rem 1.25rem">
     <p class="muted">
-      Valid for {{ expires_in }}, and it works once. Opening it signs them in and takes
-      them straight to registering a passkey, which is how they will sign in after that.
+      Valid for {{ expires_in }}, and it works once.
+      {% if is_recovery %}
+        Opening it signs them in, in place of the passkey they have lost access to.
+      {% else %}
+        Opening it signs them in and takes them straight to registering a passkey,
+        which is how they will sign in after that.
+      {% endif %}
     </p>
 
     <textarea id="invite-url" class="mono" rows="3" readonly
@@ -46,8 +51,9 @@ means minting a fresh one from the sign-in page.
     <span id="copy-status" class="small muted" role="status" aria-live="polite"></span>
 
     <p class="small muted mt1 mb0">
-      This page cannot show it again. If it is lost or expires, they can ask for a new
-      one from the sign-in page.
+      This page cannot show it again. Sharing it through anything that generates a
+      link preview — chat apps, some email scanners — can spend it before they do; if
+      that happens, or it simply expires, issue a new one from the administrators page.
     </p>
   </div>
 </div>

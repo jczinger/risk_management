@@ -38,8 +38,16 @@
               {% if admin.is_active %}<span class="badge badge--ok">Active</span>
               {% else %}<span class="badge badge--muted">Inactive</span>{% endif %}
             </td>
-            <td class="right">
+            <td class="right" style="display:flex; gap:.35rem; justify-content:flex-end; flex-wrap:wrap">
               {% if admin.pk != user.pk %}
+                {% if admin.is_active %}
+                  <form method="post" action="{% url 'accounts:admin_reissue_link' admin.pk %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn--sm">
+                      {% if admin.has_passkey %}New sign-in link{% else %}Resend invite{% endif %}
+                    </button>
+                  </form>
+                {% endif %}
                 <form method="post" action="{% url 'accounts:admin_toggle_active' admin.pk %}">
                   {% csrf_token %}
                   <button type="submit" class="btn btn--sm">

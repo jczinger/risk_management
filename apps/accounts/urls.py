@@ -40,4 +40,9 @@ urlpatterns = [
         views.admin_toggle_active,
         name="admin_toggle_active",
     ),
+    path(
+        "administrators/<int:pk>/reissue-link/",
+        views.admin_reissue_link,
+        name="admin_reissue_link",
+    ),
 ]

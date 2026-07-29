@@ -578,12 +578,14 @@ def admin_invite(request):
 
         return render(
             request,
-            "accounts/invite_sent.html",
+            "accounts/link_issued.html",
             {
-                "new_admin": user,
+                "target": user,
                 "url": url,
                 "emailed": emailed,
                 "expires_in": link_service.describe_lifetime(LinkPurpose.INVITE),
+                "is_recovery": False,
+                "just_added": True,
             },
         )
 
@@ -633,3 +635,43 @@ def admin_toggle_active(request, pk: int):
         + ("deactivated." if not user.is_active else "reactivated."),
     )
     return redirect("accounts:admin_list")
+
+
+@login_required
+@require_POST
+def admin_reissue_link(request, pk: int):
+    """
+    Mint a fresh sign-in link for an admin who never finished enrolling, or who has
+    lost their passkey — the only gap the original invite link left: it works once,
+    so a link consumed by anything other than its recipient (forwarded through a chat
+    app that unfurls it, opened by an email scanner, or just clicked twice) leaves
+    them with no way back in except asking whoever runs this console.
+
+    The purpose follows what the account already has: no passkey yet is still a first
+    sign-in, so this mints another :attr:`LinkPurpose.INVITE` — same seven-day window,
+    no "account recovered" notice to the other admins, because nothing is being
+    recovered. A passkey already on file makes this a :attr:`LinkPurpose.RECOVERY`,
+    the same as the self-service form, with that form's shorter window and the notice
+    to colleagues that a working credential is being replaced.
+    """
+    user = get_object_or_404(User, pk=pk)
+
+    if not user.is_active:
+        messages.error(request, "Reactivate this administrator before issuing a new link.")
+        return redirect("accounts:admin_list")
+
+    purpose = LinkPurpose.RECOVERY if user.has_passkey else LinkPurpose.INVITE
+    _, url = link_service.issue_link(user, purpose, issued_by=request.user)
+    emailed = link_service.send_link(user, url, purpose, church_name=_church_name(request))
+
+    return render(
+        request,
+        "accounts/link_issued.html",
+        {
+            "target": user,
+            "url": url,
+            "emailed": emailed,
+            "expires_in": link_service.describe_lifetime(purpose),
+            "is_recovery": purpose == LinkPurpose.RECOVERY,
+        },
+    )
