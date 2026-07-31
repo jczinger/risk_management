@@ -304,6 +304,66 @@ class RecoveryNotificationTests(TenantTestCase):
         self.assertEqual(mail.outbox, [])
 
 
+class SelfServiceNewDeviceLinkTests(TenantTestCase):
+    """
+    A signed-in admin minting their own link, to add a passkey on another device —
+    the self-service half of what an admin does for someone else via
+    ``admin_reissue_link``.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.admin = self.make_admin(email="sam@church.ca")
+        self.make_passkey(self.admin)
+        self.client = self.signed_in_client(self.admin)
+
+    def test_a_signed_in_admin_can_mint_their_own_link(self):
+        response = self.client.post(reverse("accounts:security_new_device_link"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "/accounts/link/")
+        link = LoginLink.objects.filter(user=self.admin).latest("created_at")
+        self.assertEqual(link.purpose, LinkPurpose.RECOVERY)
+        self.assertEqual(link.issued_by_id, self.admin.pk)
+
+    def test_signing_out_is_required(self):
+        anon = Client(HTTP_HOST=self.TEST_DOMAIN)
+
+        response = anon.post(reverse("accounts:security_new_device_link"))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("accounts:login"), response.headers["Location"])
+
+    def test_opening_the_self_issued_link_lands_on_the_security_page(self):
+        """
+        The point of the feature: it exists to add a passkey on the device that opens
+        it, so landing on the dashboard instead would leave that a click away.
+        """
+        issued = self.client.post(reverse("accounts:security_new_device_link"))
+        url = issued.context["url"]
+
+        new_device = Client(HTTP_HOST=self.TEST_DOMAIN)
+        response = new_device.post(url, follow=True)
+
+        self.assertEqual(int(new_device.session["_auth_user_id"]), self.admin.pk)
+        self.assertEqual(response.request["PATH_INFO"], reverse("accounts:security"))
+
+    def test_the_other_admins_are_told_when_it_is_used(self):
+        """
+        Recovery's usual loudness applies here too: a link-based sign-in happened,
+        regardless of who asked for the link, and colleagues should know in case it
+        was not really the account holder who asked.
+        """
+        self.make_admin(email="jo@church.ca")
+
+        issued = self.client.post(reverse("accounts:security_new_device_link"))
+        mail.outbox.clear()  # drop the "here is your link" email issuing it just sent
+        Client(HTTP_HOST=self.TEST_DOMAIN).post(issued.context["url"])
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["jo@church.ca"])
+
+
 class RecoveryRequestTests(TenantTestCase):
     def setUp(self):
         super().setUp()

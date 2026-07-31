@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% comment %}
-Shown once, right after a sign-in link is minted — at account creation, or when an
-admin reissues one. The link is a credential, so it is never stored for later display
-and never reachable by reloading — leaving this page means minting another one.
+Shown once, right after a sign-in link is minted — at account creation, when an admin
+reissues one for someone else, or when a signed-in user mints one for themselves to use
+on another device. The link is a credential, so it is never stored for later display and
+never reachable by reloading — leaving this page means minting another one.
 {% endcomment %}
 
 {% block title %}Sign-in link{% endblock %}
@@ -11,38 +12,47 @@ and never reachable by reloading — leaving this page means minting another one
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>{% if just_added %}{{ target.get_full_name }} has been added{% else %}A new sign-in link for {{ target.get_full_name }}{% endif %}</h1>
+    <h1>
+      {% if just_added %}{{ target.get_full_name }} has been added
+      {% elif for_self %}Your new sign-in link
+      {% else %}A new sign-in link for {{ target.get_full_name }}
+      {% endif %}
+    </h1>
     <p class="lede">{{ target.email }}</p>
   </div>
 </div>
 
 {% if emailed %}
   <div class="callout callout--ok">
-    <p class="mb0">Their sign-in link has been emailed to them.</p>
+    <p class="mb0">
+      {% if for_self %}It has been emailed to you.{% else %}Their sign-in link has been emailed to them.{% endif %}
+    </p>
   </div>
 {% else %}
   <div class="callout callout--warn">
     <p class="mb0">
-      <strong>The email could not be sent.</strong> Copy the link below and give it to
-      them another way.
+      <strong>The email could not be sent.</strong>
+      {% if for_self %}Copy the link below and use it another way.{% else %}Copy the link below and give it to them another way.{% endif %}
     </p>
   </div>
 {% endif %}
 
 <div class="card">
   <div class="card-head">
-    <h2>Their sign-in link</h2>
+    <h2>{% if for_self %}Your sign-in link{% else %}Their sign-in link{% endif %}</h2>
     <span class="badge badge--info">Shown once</span>
   </div>
   <div style="padding: 0 1.25rem 1.25rem">
     <p class="muted">
       Valid for {{ expires_in }}, and it works once. Opening it shows a confirmation
-      page first — nothing is spent until they press Continue on it —
+      page first — nothing is spent until
+      {% if for_self %}you press Continue on it —{% else %}they press Continue on it —{% endif %}
       {% if is_recovery %}
-        which then signs them in, in place of the passkey they have lost access to.
+        {% if for_self %}which then signs you in, in place of the passkey this device does not have.
+        {% else %}which then signs them in, in place of the passkey they have lost access to.{% endif %}
       {% else %}
-        which then signs them in and takes them straight to registering a passkey,
-        which is how they will sign in after that.
+        {% if for_self %}which then signs you in and takes you straight to registering a passkey.
+        {% else %}which then signs them in and takes them straight to registering a passkey, which is how they will sign in after that.{% endif %}
       {% endif %}
     </p>
 
@@ -52,14 +62,14 @@ and never reachable by reloading — leaving this page means minting another one
     <span id="copy-status" class="small muted" role="status" aria-live="polite"></span>
 
     <p class="small muted mt1 mb0">
-      This page cannot show it again. If it is lost, or it simply expires, issue a new
-      one from the administrators page.
+      This page cannot show it again. If it is lost, or it simply expires, request
+      another one from the {% if for_self %}security{% else %}administrators{% endif %} page.
     </p>
   </div>
 </div>
 
 <div class="actions">
-  <a class="btn btn--primary" href="{% url 'accounts:admin_list' %}">Done</a>
+  <a class="btn btn--primary" href="{% if for_self %}{% url 'accounts:security' %}{% else %}{% url 'accounts:admin_list' %}{% endif %}">Done</a>
 </div>
 {% endblock %}
 

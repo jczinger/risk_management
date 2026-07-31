@@ -31,6 +31,11 @@ urlpatterns = [
     path("link/<str:payload>/", views.link_consume, name="link_consume"),
     # Own account
     path("security/", views.security, name="security"),
+    path(
+        "security/new-device-link/",
+        views.security_new_device_link,
+        name="security_new_device_link",
+    ),
     path("profile/", views.profile, name="profile"),
     # This church's other admins
     path("administrators/", views.admin_list, name="admin_list"),
@@ -45,4 +50,9 @@ urlpatterns = [
         views.admin_reissue_link,
         name="admin_reissue_link",
     ),
+    path("administrators/<int:pk>/access/", views.admin_access, name="admin_access"),
+    # Access levels — what an administrator is allowed to do
+    path("access-levels/", views.access_level_list, name="access_level_list"),
+    path("access-levels/new/", views.access_level_create, name="access_level_create"),
+    path("access-levels/<int:pk>/edit/", views.access_level_edit, name="access_level_edit"),
 ]

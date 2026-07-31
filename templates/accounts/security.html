@@ -71,6 +71,24 @@
 
 <div class="card">
   <div class="card-head">
+    <h2>Add a passkey on a different device</h2>
+  </div>
+  <div style="padding: 0 1.25rem 1.25rem">
+    <p class="muted">
+      The button above registers a passkey on <strong>this</strong> device. To add one
+      on a phone or another computer, get a sign-in link here, then open it there — it
+      shows a confirmation before it does anything, so it is safe to send yourself
+      however you like.
+    </p>
+    <form method="post" action="{% url 'accounts:security_new_device_link' %}">
+      {% csrf_token %}
+      <button type="submit" class="btn">Get a link for another device</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
     <h2>If you lose a passkey</h2>
   </div>
   <div style="padding: 0 1.25rem 1.25rem">
