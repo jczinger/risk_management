@@ -1,10 +1,10 @@
 """
 WebAuthn (passkey) ceremonies.
 
-Passkeys are the **primary** sign-in method (Build Spec §1). A passkey proves
-possession of the device and, with user verification, that the person unlocked it —
-so a passkey login is not additionally prompted for TOTP. The password path is the
-fallback, and *that* is what requires a second factor.
+Passkeys are the **only** sign-in method (Build Spec §1, amended 2026-07-29). A
+passkey proves possession of the device and, with user verification, that the person
+unlocked it. The way in without one — first sign-in or recovery — is a single-use
+emailed link (see BUILD_NOTES §1.20), never a password.
 
 Two ceremonies, each in two halves:
 
@@ -25,7 +25,6 @@ Discoverable credentials (resident keys) are requested, which is what makes
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 
@@ -169,20 +168,12 @@ def finish_registration(request, user: User, credential_json: str, label: str = 
     if Passkey.objects.filter(credential_id=credential_id).exists():
         raise WebAuthnError("That passkey is already registered.")
 
-    transports = ""
-    try:
-        parsed = json.loads(credential_json)
-        transports = ",".join(parsed.get("response", {}).get("transports", []) or [])[:100]
-    except (ValueError, AttributeError):
-        pass
-
     passkey = Passkey.objects.create(
         user=user,
         credential_id=credential_id,
         public_key=verified.credential_public_key,
         sign_count=verified.sign_count or 0,
         label=(label or "").strip()[:100],
-        transports=transports,
     )
     logger.info("Passkey registered for user %s", user.pk)
     return passkey
@@ -193,28 +184,18 @@ def finish_registration(request, user: User, credential_json: str, label: str = 
 # ---------------------------------------------------------------------------
 
 
-def begin_authentication(request, user: User | None = None) -> str:
+def begin_authentication(request) -> str:
     """
     Return the JSON options for ``navigator.credentials.get()``.
 
-    With no ``user``, no ``allowCredentials`` list is sent, so the browser offers
-    whichever discoverable passkey it holds for this Relying Party — the passwordless
-    "just sign in" flow.
+    No ``allowCredentials`` list is sent, so the browser offers whichever discoverable
+    passkey it holds for this Relying Party — the passwordless "just sign in" flow.
     """
     _prune_challenges()
 
-    allow = []
-    if user is not None:
-        allow = [
-            PublicKeyCredentialDescriptor(id=base64url_to_bytes(p.credential_id))
-            for p in user.passkeys.filter(is_active=True)
-        ]
-        if not allow:
-            raise WebAuthnError("This account has no passkey registered.")
-
     options = generate_authentication_options(
         rp_id=rp_id(),
-        allow_credentials=allow or None,
+        allow_credentials=None,
         user_verification=UserVerificationRequirement.PREFERRED,
     )
 
@@ -224,7 +205,7 @@ def begin_authentication(request, user: User | None = None) -> str:
     WebAuthnChallenge.objects.create(
         challenge=options.challenge,
         purpose=WebAuthnChallenge.PURPOSE_AUTHENTICATE,
-        user=user,
+        user=None,
         session_key=request.session.session_key,
     )
 
@@ -337,27 +318,14 @@ def _bind_schema_owning_passkey(request, credential_id: str) -> Passkey | None:
 
 def remove_passkey(user: User, passkey_id: int) -> None:
     """
-    Remove a passkey, refusing to lock the user out.
+    Remove a passkey.
 
-    If this is their last passkey and they have no working password + TOTP fallback,
-    removing it would leave no way in at all.
+    Removing the last one is allowed: the emailed sign-in link is always there as the
+    way back in (BUILD_NOTES §1.20), so there is no lockout to guard against.
     """
     passkey = user.passkeys.filter(pk=passkey_id, is_active=True).first()
     if passkey is None:
         raise ValidationError("That passkey was not found on your account.")
 
-    remaining = user.passkeys.filter(is_active=True).exclude(pk=passkey.pk).count()
-    if remaining == 0 and not user.can_remove_last_passkey:
-        raise ValidationError(
-            "This is your only passkey, and you have no password with an "
-            "authenticator app set up as a fallback. Add one of those first, or "
-            "register a second passkey — otherwise you would be locked out."
-        )
-
     passkey.is_active = False
     passkey.save(update_fields=["is_active"])
-
-
-def b64_snippet(value: bytes) -> str:
-    """Short, log-safe rendering of a credential id."""
-    return base64.urlsafe_b64encode(value)[:12].decode("ascii")

@@ -511,6 +511,157 @@ callable rather than `rate=settings.X`, which freezes at import and quietly defe
 
 ---
 
+### 1.21 Access levels, and a review step for the work done under them
+
+**This departs from a positive statement in the spec**, at the product owner's direction (29
+July 2026). Build Spec §2 says "Tenant users: screening admins only. Multiple per church. All
+have equal permissions within their church," and the PRD, the README and OPERATIONS.md all
+repeat it. That is now the description of a **Primary Admin**; a church can also create
+limited access levels, and the first of them — **Department Admin** — sees only the volunteers
+who have served in the departments it is given.
+
+Nothing here touches the DO NOT BUILD list. That list forbids SSO, volunteer and pastor
+logins, district rollups, SMS, billing and scheduling. Differentiated permissions *among
+screening admins* is none of those; what it does contradict is a design statement, which is
+why it is recorded here in full rather than buried in a commit.
+
+**Named "access level", not "role."** `org.Role` already means a ministry position — Sunday
+School Teacher, Nursery Helper — and the two sit next to each other on the same screens. A
+church reading "role" in the Administrators section would reasonably think of the other kind.
+
+**Capabilities are columns, not `auth.Permission` and not JSON.** `django.contrib.auth` is in
+both SHARED_APPS and TENANT_APPS, so `auth_permission` exists twice per database and
+`user.has_perm()` answers a different question depending on which schema is bound — two
+sources of truth for one question, which is not a foundation for authorisation. Django's
+permissions are also per-model CRUD, where `record_screening` spans five models and one
+product idea. Columns get `help_text`, which is where a church reads what a capability does
+*not* include, and they are filterable, which both the escalation rule and the lockout guard
+need. The cost is that the set is closed and a church cannot invent one; that is the right
+trade, because a capability with no code enforcing it is a lie.
+
+**The scope link lives on the tenant side, and not as a foreign key to `User`.** Two separate
+findings, both discovered the hard way:
+
+* `apps.accounts` is in both app lists, so its migrations run against `public` too, where
+  `org_department` does not exist. A `ManyToManyField` from `accounts.User` to
+  `org.Department` would therefore try to create a join table in `public` referencing a
+  missing table, and `deploy_migrate`'s first step would fail on every deploy.
+* A *foreign key* from a tenant-only model to `accounts.User` creates cleanly — the constraint
+  is built under `search_path = "<tenant>", public` — but it gives `User` a reverse accessor,
+  and that accessor exists in every schema including `public`, where the table does not. So
+  Django's cascade collector walks it on any `User.delete()` in the public schema and raises
+  `UndefinedTable`. Found by the console tests' teardown. `UserAccessGrant.user_id` is a plain
+  unique integer, which is the deeper reason the rest of this codebase denormalises its user
+  references rather than pointing a foreign key at `User` from a tenant app.
+
+**`is_scoped` is an explicit flag, not "has departments".** Deriving it gets the dangerous
+case backwards: a Primary Admin with no departments must be *unscoped*, and a half-finished
+Department Admin with no departments must see **nothing**. `None` and `frozenset()` are
+different answers throughout `apps/core/access.py` for the same reason.
+
+**Out of scope is 404; a missing capability is 403.** A 403 on `/org/volunteers/412/` would
+confirm that this church has a volunteer with that id and that they are in some *other*
+department — walked over the id range, a membership list, including which ids are minors.
+This system encrypts addresses and medical notes precisely to avoid that class of exposure.
+Scope is therefore enforced by narrowing the queryset `get_object_or_404` reads, never by a
+check afterwards: it is one line with the same control flow, and a separate `if` is a second
+statement that can be forgotten independently of the first — which fails *open*.
+
+**Default deny is enforced twice, on purpose.** The failure mode is a future view written the
+way all sixty used to be — `@login_required` and nothing else — which works for everybody,
+errors nowhere, and has no test to fail because nobody thought about it. `AccessGateMiddleware`
+refuses any view that declared nothing, and a test walks the URLconf and names the offending
+view at review time. The middleware is the guarantee; the test is the fast feedback. Their
+weaknesses do not overlap: the middleware covers views the test cannot see, and the test
+catches somebody quietly adding a path to the middleware's exemption list.
+
+**"Ever held a role" is monotonic, and that is intended.** A department admin keeps access to
+files they worked on after the volunteer stops serving, because records involving minors are
+retained permanently and somebody may have to answer a question about a past volunteer years
+later. The consequence is that scope only ever grows: assigning a volunteer adds them
+permanently, and ending the assignment does not take it away. Stated here rather than left to
+be discovered.
+
+**The escalation rule has two homes, and an earlier draft claimed three.** The form's
+narrowed querysets are the control for the HTTP path — a `ModelChoiceField` validates a
+submitted primary key against its own queryset, so a hand-crafted POST is already refused —
+and `apply_grant` is the control for anything that never builds a form. A third check inside
+`AccessGrantForm.clean()` was written, found to be unreachable, and removed. Verified by
+neutering each surviving layer and confirming it fails its own two tests and nothing else.
+
+**The audit trail cannot be scoped, so a limited level cannot have it.** `AuditEvent` records
+no department and cannot be given one: its pointer to the affected row is a pair of strings,
+deliberately, because ContentType ids are not tenant-stable. A partial filter on
+`entity_type="Volunteer"` would be *worse* than refusing — it would look scoped while missing
+every requirement, document and criminal-record-check entry about the same person. So
+`AccessLevel.clean()` refuses the combination outright, and `scope_audit_events` — wired
+into both audit views (2026-08-02, with a test that forges the forbidden row past
+validation) — returning nothing is the second layer.
+
+**Aggregates leak too.** `dashboard_headline`'s `blocked` and `minors` counts, the
+per-department summary, and the department and role dropdowns name nobody, so none of them
+would fail a "can they open volunteer X?" test — while between them describing the shape of
+the whole church. All are scoped, and the dropdowns matter even where the results would be
+empty anyway, because an unscoped dropdown is the org chart with no view attached to it.
+
+#### The review step
+
+Everything a Department Admin records is affirmed by a Primary Admin: requirement
+completions, recorded documents, criminal record checks, and waivers and overrides.
+
+**A pending entry counts as compliant immediately.** The owner's decision, chosen over
+holding it as outstanding. The honest cost is that a report can read "compliant" on evidence
+nobody has confirmed, which is why the backlog is surfaced in four places — a dashboard tile,
+the queue, a note on the compliance report, and a line in the nightly digest — and why
+anything unreviewed past 30 days is called out as stale rather than merely counted.
+
+**One recorded action, one queue row.** Recording a document completes the requirement it
+backs, which is two writes. Two rows would mean two clicks and would let the pair be affirmed
+separately, which is the "file disagrees with itself" failure §1.15 exists to close. So
+`mark_requirement_complete` grew `open_review=False` for the document path, and the document's
+own item points at the requirement as well.
+
+**A criminal-record-check send-back is a retraction, never a reversal — and the
+disqualification is not reversible at all.** Every door is already bolted elsewhere by design:
+`set_screening_block` refuses to move off `DISQUALIFIED`, `DisqualifyingConviction.delete()`
+raises, `DiscretionaryOverride.save()` raises on a second write, and `RoleAssignment.end()`
+has no inverse. So a *clearance* can be retracted when the check is current and carries no
+convictions and no overrides — the wrong-volunteer correction — and nothing else can.
+
+The owner was asked about this specifically and chose to let a Department Admin record a
+disqualifying conviction, reviewed like the rest. It was recommended that the step be reserved
+to a Primary Admin, on the grounds that affirmation cannot be honoured for an act with no
+route back. The owner's decision stands; what the code does instead is refuse to pretend. The
+send-back form lists what will not be undone **before** the click, names the role assignments
+the decision ended, and the outcome says plainly that it recorded a dispute rather than
+reversing anything.
+
+**The nightly digest goes to unscoped administrators only.** This was a leak, not a
+preference. The digest is one shared body built from a church-wide query, so left alone it
+would have mailed every department admin a list naming every volunteer at the church with
+anything overdue — through the new boundary, invisible in the UI, and permanent in `EmailLog`.
+The owner chose this over per-admin scoped digests, which would have required the reminder
+de-duplication key to gain the recipient: without that, a volunteer serving in two departments
+is claimed once and silently reported to only one of the two admins who needed to know, which
+is a subtle wrong answer in place of a plain absence.
+
+**The thread-local labels; it never authorises.** `Actor` grew an `access_level` so a service
+function can tell whether its work needs affirming without growing a `user` parameter, and
+`apps/core/audit.py`'s existing statement — that the thread-local is "deliberately *not*
+relied upon for correctness of authorisation" — stays true. `Actor.system()` carries no access
+level, so the nightly sweep, the seeders and every management command queue nothing; that is
+only *safe* because no reviewed writer is reachable from the sweep, which a test asserts
+rather than assumes.
+
+**The backfill is a migration, not a management command.** `has_capability` fails closed, so
+between `migrate` finishing and a command being run by hand, every administrator at every
+church would be locked out of everything — including the screen needed to fix it. Only a
+migration guarantees the ordering. It also seeds both built-in levels rather than only the one
+being granted, so a church that already exists comes out of the deploy with somewhere to put a
+department admin instead of needing an operator first.
+
+---
+
 ## 2. Where the spec needed a correction to work
 
 ### 2.1 Static files must be built into the image
@@ -619,3 +770,173 @@ Shared-hostname routing (§1.12) was additionally verified against the running s
 belonging to a church resolves to that church's schema and issues a signed cookie for it, the
 super-admin's address reaches the console with no cookie, and a wrong password produces the
 same generic refusal as an address that exists nowhere.
+
+---
+
+## 1.22 Administrators are volunteers too, and nobody screens themselves
+
+**A gap, not a decision.** With `edit_volunteers`, `record_screening` and `record_crc`, an
+administrator could create a volunteer record for themselves, assign themselves a ministry role,
+tick their own Plan to Protect training, and record their own criminal record check as clear.
+Nothing refused it, because nothing *knew* it was them: `accounts.User` and `org.Volunteer` had no
+link of any kind — no foreign key, no integer pointer, and the string "user" did not occur
+anywhere in `apps/org/models.py`. Plan to Protect presumes the screener and the screened are two
+different people; the data model had no way to say so. §1.21, `docs/SECURITY.md`, the PRD and
+`docs/ACCEPTANCE.md` were all silent on it. The owner found the same hole from the other side —
+"an administrator should also be a volunteer" — and linking the records is what made the refusal
+expressible, so both landed together (2 August 2026).
+
+**The link is an integer, and that is a scar rather than a style.** `Volunteer.user_id` is an
+`IntegerField(null=True, unique=True)`, not a `OneToOneField` to `User`, for exactly the reason
+`UserAccessGrant.user_id` is. A relation gives `User` a reverse accessor, and that accessor is a
+Python-level fact present in every schema — including `public`, where `org_volunteer` does not
+exist. Django's cascade collector walks it on `User.delete()` and the delete dies with
+`UndefinedTable` in code that has nothing to do with volunteers. It cost 74 failing tests to learn
+the first time. `unique` with `null=True` is exactly the constraint wanted: Postgres permits many
+NULLs in a unique index, so the column reads "at most one file per administrator, and most files
+belong to nobody".
+
+**The rule, and its one escape hatch.** `may_record_against` deliberately mirrors
+`may_review` down to the shape of the exception, so a church learns one rule rather than two:
+
+* Not their own file — allowed. The overwhelmingly common answer.
+* Their own file, on a **limited** level — refused, always. Somebody with access to the whole
+  church exists by construction, or that admin could not have been created.
+* Their own file, seeing the **whole church** — refused while another such administrator exists;
+  allowed when they are the last one. Refusing outright would leave a single-administrator church
+  unable to complete its own file inside VMS at all, which only moves that screening onto paper
+  where nothing tracks it. The audit summary records which of the two happened.
+
+Reading is untouched throughout. Hiding somebody's own screening status from them would teach
+them to keep a second copy on a spreadsheet, which is worse than showing it.
+
+**403, not 404** — the opposite of the out-of-scope rule, and on purpose. Out of scope hides the
+record because confirming it exists is itself the leak. Here they can already see the file;
+pretending it had vanished would be a lie, and this refusal is one the person needs explained.
+
+**Two layers, weaknesses disjoint.** Writable twins of the scoped fetch helpers
+(`_writable_volunteer_or_404` and friends) are the control — a view cannot take the record without
+also taking the check. A URL-walking test is the fast feedback, and is what catches a write view
+added next year. The five screening writers additionally check the ambient actor's `user_id`, the
+posture `RoleAssignment.clean()` already takes: a rule enforced only at the edge is a rule with an
+inside. Every way that check can fail to identify somebody fails safe — `Actor.system()` carries
+no user id and matches no file, and an actor whose access level cannot be resolved is treated as
+limited.
+
+`apps/core/audit.py`'s "the thread-local never authorises" is narrowed rather than contradicted:
+two facts carried there are read for correctness — who the person is, and whether their level is
+scoped — and neither is a question about what they are *permitted* to do.
+
+**The record appears on its own, and VMS refuses to guess whose it is.** A new administrator gets
+a volunteer file from their name and address at the moment their account is made, with **no**
+ministry role. That leaves it invisible to every limited access level, including their own,
+because scope runs through role assignments; a Primary Admin completes it. Intended, and stated
+here so it is not discovered.
+
+Where a volunteer already exists under that name, **nothing is created**. Two people genuinely can
+share a name, and silently attaching an administrator to somebody else's screening record — or
+silently merging two — has no undo, and VMS has no merge tool. The administrators list surfaces
+the collision with an explicit link-or-create choice. `admin_invite` is now atomic, which it never
+was: it could already strand a `User` with no access level, and a third write made that worth
+fixing rather than documenting.
+
+**Linking is not a back door.** The link is what makes the rule enforceable, so freedom to
+re-point your own link would be a way straight out of it — aim it at a stranger's file and your
+own becomes fair game. Choosing your own file is refused while another church-wide administrator
+exists, and there is deliberately **no unlink**: detaching is the same escape by another name.
+
+**The backfill is a management command, and that is the inverse of §1.21's.** That one had to be a
+migration, because `has_capability` fails closed and any gap between `migrate` and the backfill
+would have locked every administrator at every church out of everything. Nothing here is like
+that: a missing volunteer record locks nobody out, and a migration would have to write
+`Volunteer.email`, which is encrypted — needing the tenant data key that
+`UserManager.use_in_migrations = False` exists to keep out of migrations.
+
+**Refusing to make a disqualified volunteer an administrator** was not asked for. Somebody barred
+from every position of trust under the policy should not be administering the screening of
+others. Stated in the refusal rather than hidden by omitting the button.
+
+### Four gaps found while doing it
+
+Each was verified in the source before being reported, and each has a test named for what it
+actually allowed.
+
+**The encryption key download was wide open.** `key_backup_download` carried
+`@open_to_any_signed_in_user`, so any signed-in administrator — including one on a limited level
+holding not a single capability — could GET it at any time, long after the backup step was
+finished, and receive the key that decrypts every volunteer record at the church. Its sibling
+`key_backup` at least redirected away once the church had confirmed; this had no state check at
+all. Worse, it wrote **no audit entry**, so `docs/SECURITY.md`'s promise that "every key export
+writes an entry into that church's own audit trail" was true of the operator console's export and
+not of this one: a church could have been drained and their own trail would show nothing.
+
+The page stays open to anyone signed in — `ForceKeyBackupMiddleware` traps everybody there, and
+somebody stuck on it needs to be told what is happening rather than shown a wall — but the key,
+the download and the confirmation are all now behind `manage_users`. The confirmation especially:
+it is a compliance record, the form only checks a fingerprint printed on the page, and somebody
+who was never shown the key cannot truthfully make it.
+
+**Custom access levels skipped review entirely.** `Actor.needs_review` compared the level's slug
+against `"department-admin"` exactly. A church building its own limited level on the access-level
+screen — which the form exposes `is_scoped` precisely to allow — produced work that never entered
+the review queue, while `may_review` still refused that person as a reviewer: a limited admin
+reviewed by nobody, reviewing nobody, silently. This holed §1.21's central feature one day after
+it shipped. The gate now reads `is_scoped`, the same flag `may_review` reads, so "a scoped admin's
+work needs affirming" and "only an unscoped admin may affirm" are two readings of one fact rather
+than two facts that can drift.
+
+**The review gate failed open on error.** `_access_context` swallowed any failure resolving the
+grant and returned blanks — which meant *not scoped*, which meant no review item. One transient
+database error and a limited admin's entry was recorded as though somebody with church-wide
+responsibility had done it. `apps/review/recording.py` deliberately raises on the same class of
+problem, for the reason written in its own docstring: a missing review item reads as "somebody
+checked this". The two modules now agree. The tolerance stays — this runs on every request,
+including sign-in — but failure sets `access_level_unknown`, and an actor with an unknown level
+and a person behind it needs review. A spurious item is one click; a missing one is permanent.
+
+**Self-affirmation could be unlocked on purpose.** `may_review` allows self-affirmation when
+nobody else could do it, for the church whose last other reviewer left. That condition is
+mutable: an administrator sitting on a pile of their own unaffirmed entries could deactivate the
+only other church-wide administrator and wave the lot through. The existing guards did not cover
+it — `_would_strand_the_church` asks who can manage access, which is a different set of people.
+Deactivation is now refused while the actor holds pending entries of their own and the subject is
+the last other reviewer. Work recorded *after* a church genuinely becomes single-administrator is
+untouched, because that is the case the hatch exists for.
+
+### Also corrected in passing
+
+`templates/accounts/admin_invite.html` still told the inviter "they will have the same access you
+do" — written before access levels and left contradicting the form directly beneath it, which asks
+you to choose one.
+
+`test_ciphertext_does_not_contain_plaintext` looked for the two characters `"42"` in roughly sixty
+characters of base64. That collides about one run in seventy, so the suite failed at random and
+blamed the crypto. The marker is now eight characters.
+
+## 1.23 A simplification pass, and what it changed on purpose (2026-08-02)
+
+A codebase-wide simplification review removed dead code, deduplicated copy-paste, and
+reshaped self-defeating queries. Most of it changes nothing observable; four items
+changed posture deliberately, each approved by the owner:
+
+- **`scope_audit_events` is now actually wired in.** §1.21 described it as the second
+  scoping layer behind `AccessLevel.clean()`, but nothing called it — the audit views
+  now do, and a test forges the forbidden scoped-level-with-`view_audit` row past
+  validation to prove the views answer with nothing.
+- **`User.can_remove_last_passkey` is gone.** It was hardcoded `True` (the emailed
+  link is always the way back in, §1.20), which made the lockout guard in
+  `remove_passkey` unreachable — and that guard's error text still described the
+  removed password+TOTP fallback. Removing your last passkey is allowed, by design.
+- **`Passkey.transports` and `Passkey.is_discoverable` were dropped** (migration
+  `accounts.0003`). Written at registration, read by nothing, ever.
+- **`AccessGateMiddleware` lost its path-exemption list.** `/healthz/` passes the
+  gate the same way every public page does — the `public_view` decorator on the view —
+  and static files are answered by WhiteNoise before `process_view` runs. The
+  health-path carve-out in `no_tenant_found` (§2.2) now calls the `healthz` view
+  rather than duplicating its body.
+
+Two real bugs were fixed in the same pass: the volunteer list's pager links replaced
+the whole querystring, silently dropping active filters (now carried, with a
+regression test); and the printed volunteer file omitted the "waived by" note on
+recurring requirements — both row loops now render through one shared partial, so a
+waived recurring requirement reads the same as a waived onboarding one.

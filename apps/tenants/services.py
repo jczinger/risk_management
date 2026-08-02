@@ -81,6 +81,7 @@ def provision_church(
     from apps.accounts.links import issue_link
     from apps.accounts.models import LinkPurpose, User
     from apps.core.models import AuditAction
+    from apps.core.seed import grant_primary_admin, seed_access_levels
     from apps.requirements.seed import seed_default_template
 
     schema_name = (schema_name or "").strip().lower()
@@ -120,12 +121,18 @@ def provision_church(
     # The Tenant row is not yet committed, so connection.tenant cannot supply the
     # key; hand it over explicitly for the duration of the tenant-schema work.
     with schema_context(schema_name), override_key(dek):
+        # Before the admin exists, because the grant below needs the level to be there.
+        # Unconditional, unlike the requirement template: a church with no access levels
+        # has no administrator who can do anything.
+        seed_access_levels()
+
         admin = User.objects.create_user(
             email=admin_email,
             first_name=admin_first_name.strip(),
             last_name=admin_last_name.strip(),
             is_active=True,
         )
+        grant_primary_admin(admin.pk, granted_by_display="platform provisioning")
 
         if seed_template:
             seeded = seed_default_template()
@@ -151,7 +158,7 @@ def provision_church(
             "User",
             entity_id=admin.pk,
             entity_label=admin.get_full_name() or "first admin",
-            summary="First screening administrator created",
+            summary="First screening administrator created (Primary Admin)",
         )
 
         # Issued inside the schema context: the payload carries the schema name read

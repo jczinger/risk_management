@@ -38,6 +38,15 @@
 <div class="grid grid--2">
   <div class="card">
     <h2>Status</h2>
+    {% if instance.unverified_review %}
+      <p>
+        <span class="badge badge--warn">Unverified</span>
+        <span class="small muted">
+          Recorded by {{ instance.unverified_review.recorded_by_display }} and not yet
+          affirmed by a primary administrator.
+        </span>
+      </p>
+    {% endif %}
     <dl class="facts">
       <dt>Status</dt><dd><strong>{{ instance.get_status_display }}</strong></dd>
       <dt>Started</dt><dd>{{ instance.started_on|date:"j F Y"|default:"—" }}</dd>

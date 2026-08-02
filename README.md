@@ -6,7 +6,7 @@ encryption key per church.
 
 Stage 1 as specified in `VMS - Build Spec v1.0.md`, from `VMS - PRD v1.2.md`.
 
-**Who uses it:** each church's **screening administrators**, plus one platform **super-admin**.
+**Who uses it:** each church's **screening administrators** — each on an *access level* that sets what they can do and which departments they can see — plus one platform **super-admin**. Each administrator also has a volunteer record of their own, and nobody records screening against their own file while another administrator could.
 There are no volunteer or pastor logins in Stage 1.
 
 ---
@@ -144,14 +144,15 @@ sign-in link and passkey-enrolment gates, the age rules, and a render sweep over
 ```
 config/            Django project — settings (base/dev/prod/test), URLs, Celery
 apps/
-  core/            Encryption, blind indexes, audit trail, base models, nightly tasks
+  core/            Encryption, blind indexes, audit trail, access levels, nightly tasks
   tenants/         Public-schema church registry, provisioning, key custody
-  accounts/        Screening admins, passkeys, sign-in links
+  accounts/        Screening admins, passkeys, sign-in links, the access-level screens
   org/             Departments, roles, volunteers, assignments
   requirements/    The requirement engine, seed template, criminal record checks
   documents/       Three storage modes, encrypted uploads
   notifications/   Email provider abstraction, reminder digests
   reporting/       Dashboard, compliance report, volunteer file, audit viewer
+  review/          The queue of entries awaiting a primary admin's affirmation
 templates/         Server-rendered templates (HTMX, no SPA)
 static/            CSS and JS, including a vendored htmx — no CDN
 scripts/           backup.sh, restore.sh
@@ -164,6 +165,7 @@ docs/              Deployment, operations, security, acceptance
 
 Python 3.13 · Django 5.2 LTS · PostgreSQL 16 with `django-tenants` · HTMX · Celery + Redis ·
 WebAuthn passkeys, with a single-use emailed link for first sign-in and recovery ·
+Per-church access levels, with department scoping, a review step and separation of duties ·
 Azure Communication Services Email (Canada) ·
 Docker Compose.
 

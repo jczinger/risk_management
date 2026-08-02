@@ -27,7 +27,7 @@ from django.utils import timezone
 
 from apps.accounts import webauthn_service
 from apps.accounts.models import Passkey, User, WebAuthnChallenge
-from apps.core.models import AuditAction, AuditEvent
+from apps.core.models import AccessLevel, AuditAction, AuditEvent
 from apps.core.tests.base import TenantTestCase
 
 
@@ -141,6 +141,61 @@ class PasskeyRegistrationTests(TenantTestCase):
 
         self.assertTrue(stored.startswith("v1."))
         self.assertNotIn("Priya", stored)
+
+    def test_a_device_name_may_hold_any_character_a_keyboard_produces(self):
+        """
+        The regression this exists to catch.
+
+        The label used to ride in an ``X-Passkey-Label`` header, and header values must
+        be ISO-8859-1. A phone substitutes a curly apostrophe (U+2019) for a typed one
+        without being asked, so naming a passkey "Grammy's" made ``fetch`` throw a bare
+        TypeError before the request left the browser — and the only workaround anyone
+        could find was to drop the apostrophe. A body carries any of it.
+        """
+        webauthn_service.begin_registration(_fake_request(self.admin), self.admin)
+        verified = mock.Mock(
+            credential_id=b"curly-cred", credential_public_key=b"pk", sign_count=0
+        )
+
+        label = "Grammy’s iPad — Réception"
+        with mock.patch.object(
+            webauthn_service, "verify_registration_response", return_value=verified
+        ):
+            response = self.client.post(
+                reverse("accounts:webauthn_register_finish"),
+                data=json.dumps({"credential": {"id": "x"}, "label": label}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Passkey.objects.get().label, label)
+
+    def test_a_body_with_no_credential_is_refused(self):
+        response = self.client.post(
+            reverse("accounts:webauthn_register_finish"),
+            data=json.dumps({"label": "just a name"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Passkey.objects.count(), 0)
+
+    def test_a_label_that_is_not_text_is_ignored_rather_than_crashing(self):
+        """The body is untrusted; a posted object where a string belongs must not 500."""
+        webauthn_service.begin_registration(_fake_request(self.admin), self.admin)
+        verified = mock.Mock(credential_id=b"odd-cred", credential_public_key=b"pk", sign_count=0)
+
+        with mock.patch.object(
+            webauthn_service, "verify_registration_response", return_value=verified
+        ):
+            response = self.client.post(
+                reverse("accounts:webauthn_register_finish"),
+                data=json.dumps({"credential": {"id": "x"}, "label": {"nope": 1}}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Passkey.objects.get().label, "")
 
 
 class PasskeyAuthenticationTests(TenantTestCase):
@@ -401,11 +456,17 @@ class AdminManagementTests(TenantTestCase):
         super().setUp()
         self.admin = self.make_admin(email="first@church.ca")
         self.client = self.signed_in_client(self.admin)
+        self.primary_level = AccessLevel.objects.get(slug=AccessLevel.PRIMARY_ADMIN)
 
     def test_adding_an_admin_mints_a_link_and_shows_it(self):
         response = self.client.post(
             reverse("accounts:admin_invite"),
-            {"first_name": "Sam", "last_name": "Lee", "email": "sam@church.ca"},
+            {
+                "first_name": "Sam",
+                "last_name": "Lee",
+                "email": "sam@church.ca",
+                "access_level": self.primary_level.pk,
+            },
         )
         self.assertEqual(response.status_code, 200)
 
@@ -419,16 +480,38 @@ class AdminManagementTests(TenantTestCase):
         # one the sender can see.
         self.assertContains(response, "/accounts/link/")
 
+    def test_an_invitation_must_name_an_access_level(self):
+        """
+        An account with no access level can do nothing, so there is nothing to invite
+        them to. Asked for here rather than deferred to a second screen.
+        """
+        response = self.client.post(
+            reverse("accounts:admin_invite"),
+            {"first_name": "Sam", "last_name": "Lee", "email": "sam@church.ca"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(User.objects.filter(first_name="Sam").exists())
+
     def test_a_duplicate_address_is_refused(self):
         response = self.client.post(
             reverse("accounts:admin_invite"),
-            {"first_name": "Another", "last_name": "Person", "email": "FIRST@church.ca"},
+            {
+                "first_name": "Another",
+                "last_name": "Person",
+                "email": "FIRST@church.ca",
+                "access_level": self.primary_level.pk,
+            },
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "already exists")
 
-    def test_all_admins_have_equal_permissions(self):
-        """Build Spec §2: no roles within a church, by design."""
+    def test_a_primary_admin_reaches_every_screen(self):
+        """
+        Build Spec §2 used to say every admin at a church had equal permissions. Amended
+        2026-07-29 (BUILD_NOTES §1.21): what used to be true of everybody is now true of
+        a **Primary Admin**, which is what the backfill gave every existing account and
+        what ``make_admin`` still defaults to.
+        """
         second = self.make_admin(email="second@church.ca")
         client = self.signed_in_client(second)
 
@@ -437,6 +520,7 @@ class AdminManagementTests(TenantTestCase):
             reverse("requirements:definition_list"),
             reverse("reporting:audit_trail"),
             reverse("accounts:admin_list"),
+            reverse("accounts:access_level_list"),
         ):
             with self.subTest(url=url):
                 self.assertEqual(client.get(url).status_code, 200)

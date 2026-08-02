@@ -1,4 +1,17 @@
-"""Forms for departments, roles and volunteer records."""
+"""
+Forms for departments, roles and volunteer records.
+
+Several of these take a ``user`` and narrow a dropdown to what that person
+administers. Two things to hold onto when reading them:
+
+* A narrowed queryset is an **affordance, not a control**. It stops an admin picking
+  something they should not, and it stops the page listing every department and role
+  name at the church — an org-chart leak with no view behind it. What actually refuses a
+  posted id is the field's own validation against that same queryset, plus the scoped
+  lookup in the view.
+* ``user=None`` means unscoped, so a caller that has no user (a management command, a
+  test) behaves as before.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +19,17 @@ from django import forms
 from django.db.models import Q
 from django.utils import timezone
 
+from apps.core.access import scope_departments, scope_roles
+
 from .models import Department, Role, RoleAssignment, Volunteer
+
+
+def role_label(role: Role, leadership: bool = True) -> str:
+    """How a role reads in a dropdown: department → role, flagged when it leads."""
+    label = f"{role.department.name} → {role.name}"
+    if leadership and role.is_leadership:
+        label += " (leadership)"
+    return label
 
 
 class DepartmentForm(forms.ModelForm):
@@ -41,14 +64,20 @@ class RoleForm(forms.ModelForm):
             ),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
         # Only offer live departments, but never hide the one already selected on an
         # existing role — that would silently reassign it on save.
         criteria = Q(is_active=True)
         if self.instance.pk and self.instance.department_id:
             criteria |= Q(pk=self.instance.department_id)
-        self.fields["department"].queryset = Department.objects.filter(criteria)
+        # Scoped defensively. Creating departments and roles is Primary-Admin-only today,
+        # so this changes nothing — but the capability is a tick on an access level, and
+        # the moment a church grants MANAGE_ORG to a limited level, this field is how
+        # they would otherwise create a role in somebody else's department.
+        self.fields["department"].queryset = scope_departments(
+            Department.objects.filter(criteria), user
+        )
 
 
 class VolunteerForm(forms.ModelForm):
@@ -57,7 +86,24 @@ class VolunteerForm(forms.ModelForm):
 
     Date of birth is a single field here; the model derives the plaintext year and
     month from it. Admins are not asked to enter the same thing twice.
+
+    On **creation** a starting ministry role is required; on an edit the field is not
+    there at all. That asymmetry is the point. A volunteer belongs to a department only
+    through a role assignment, so a volunteer created without one belongs to nowhere —
+    and the department admin who just created them would immediately lose sight of them,
+    because scoping works through exactly that relationship. Requiring the role at
+    intake means that state never exists. By the time anyone edits the record, the
+    assignment is there and is managed on its own screen.
     """
+
+    starting_role = forms.ModelChoiceField(
+        queryset=Role.objects.none(),
+        label="Starting role",
+        help_text=(
+            "Every volunteer belongs to a department through the role they serve in. "
+            "More roles can be added afterwards."
+        ),
+    )
 
     class Meta:
         model = Volunteer
@@ -94,6 +140,20 @@ class VolunteerForm(forms.ModelForm):
                 "Encrypted. Record only what is needed to keep this person safe."
             ),
         }
+
+    def __init__(self, *args, user=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance.pk:
+            # An edit. The volunteer already has assignments, managed on their own file.
+            del self.fields["starting_role"]
+        else:
+            self.fields["starting_role"].queryset = scope_roles(
+                Role.objects.filter(is_active=True, department__is_active=True).select_related(
+                    "department"
+                ),
+                user,
+            )
+            self.fields["starting_role"].label_from_instance = role_label
 
     def clean_date_of_birth(self):
         dob = self.cleaned_data.get("date_of_birth")
@@ -146,12 +206,17 @@ class RoleAssignmentForm(forms.ModelForm):
             "started_on": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
         }
 
-    def __init__(self, *args, volunteer: Volunteer | None = None, **kwargs):
+    def __init__(self, *args, volunteer: Volunteer | None = None, user=None, **kwargs):
         self.volunteer = volunteer
         super().__init__(*args, **kwargs)
 
-        queryset = Role.objects.filter(is_active=True, department__is_active=True).select_related(
-            "department"
+        # Scoped: this is both the intake path and the only way a volunteer enters a
+        # scoped admin's view, so the roles on offer must be ones they administer.
+        queryset = scope_roles(
+            Role.objects.filter(is_active=True, department__is_active=True).select_related(
+                "department"
+            ),
+            user,
         )
         if volunteer is not None:
             # Don't offer a role they already hold.
@@ -171,10 +236,7 @@ class RoleAssignmentForm(forms.ModelForm):
                 )
 
         self.fields["role"].queryset = queryset
-        self.fields["role"].label_from_instance = (
-            lambda role: f"{role.department.name} → {role.name}"
-            + (" (leadership)" if role.is_leadership else "")
-        )
+        self.fields["role"].label_from_instance = role_label
 
     def clean(self):
         cleaned = super().clean()
@@ -223,8 +285,15 @@ class VolunteerFilterForm(forms.Form):
         ],
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["role"].label_from_instance = (
-            lambda role: f"{role.department.name} → {role.name}"
+        # Scoped even though the results would be empty anyway once volunteer_list is
+        # scoped: an unscoped dropdown still enumerates every department and every role
+        # name at the church, which is the org chart with no view attached to it.
+        self.fields["department"].queryset = scope_departments(
+            Department.objects.filter(is_active=True), user
         )
+        self.fields["role"].queryset = scope_roles(
+            Role.objects.filter(is_active=True).select_related("department"), user
+        )
+        self.fields["role"].label_from_instance = lambda role: role_label(role, leadership=False)

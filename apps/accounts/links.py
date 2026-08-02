@@ -121,8 +121,8 @@ def issue_link(user: User, purpose: str, *, issued_by: User | None = None) -> tu
         AuditAction.LINK_ISSUED,
         "User",
         entity_id=user.pk,
-        entity_label=user.get_full_name() or "administrator",
-        summary=f"{LinkPurpose(purpose).label} link issued",
+        entity_label=user.display_name,
+        summary=f"{link.get_purpose_display()} link issued",
         detail={"purpose": purpose, "expires_at": link.expires_at.isoformat()},
     )
     logger.info("Issued %s link user=%s schema=%s", purpose, user.pk, schema)

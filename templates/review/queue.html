@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Review queue{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Review queue</h1>
+    <p class="lede">
+      Entries recorded by an administrator on a limited access level. Each one already
+      counts towards compliance — affirming confirms the evidence behind it, and sending it
+      back asks for it to be corrected.
+    </p>
+  </div>
+</div>
+
+{% if stale_count %}
+  <div class="messages"><ul><li class="warning">
+    {{ stale_count }} entr{{ stale_count|pluralize:"y,ies" }} ha{{ stale_count|pluralize:"s,ve" }}
+    been waiting more than {{ stale_days }} days. Until they are reviewed, the compliance
+    report rests on evidence nobody has confirmed.
+  </li></ul></div>
+{% endif %}
+
+<div class="card card--flush">
+  <div class="card-head">
+    <div class="pill-row">
+      <a class="btn btn--sm{% if show == 'pending' %} btn--primary{% endif %}" href="?">Awaiting review ({{ pending_count }})</a>
+      <a class="btn btn--sm{% if show == 'stale' %} btn--primary{% endif %}" href="?show=stale">Waiting over {{ stale_days }} days</a>
+      <a class="btn btn--sm{% if show == 'closed' %} btn--primary{% endif %}" href="?show=closed">Decided</a>
+      <a class="btn btn--sm{% if mine %} btn--primary{% endif %}" href="?mine=1&show={{ show }}">Recorded by me</a>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr><th>Recorded</th><th>Volunteer</th><th>What</th><th>By</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+          {% include "review/_row.html" with item=item can_review=can_review %}
+        {% empty %}
+          <tr><td colspan="5" class="empty">
+            <strong>Nothing here</strong>
+            {% if show == 'pending' %}Every entry has been reviewed.{% else %}No entries match.{% endif %}
+          </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if page.has_other_pages %}
+  <div class="pager">
+    {% if page.has_previous %}<a class="btn btn--sm" href="?show={{ show }}&page={{ page.previous_page_number }}">Previous</a>{% endif %}
+    <span class="small muted">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+    {% if page.has_next %}<a class="btn btn--sm" href="?show={{ show }}&page={{ page.next_page_number }}">Next</a>{% endif %}
+  </div>
+{% endif %}
+{% endblock %}

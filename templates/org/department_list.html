@@ -7,7 +7,9 @@
     <h1>Departments</h1>
     <p class="lede">Ministry areas. Each role belongs to exactly one department.</p>
   </div>
-  <div class="actions"><a class="btn btn--primary" href="{% url 'org:department_create' %}">Add a department</a></div>
+  {% if can.manage_org %}
+    <div class="actions"><a class="btn btn--primary" href="{% url 'org:department_create' %}">Add a department</a></div>
+  {% endif %}
 </div>
 
 <div class="card card--flush">
@@ -22,7 +24,7 @@
               {% if department.description %}<div class="row-note">{{ department.description|truncatewords:18 }}</div>{% endif %}
             </td>
             <td class="num">{{ department.role_count }}</td>
-            <td class="num">{{ department.active_volunteer_count }}</td>
+            <td class="num">{{ department.volunteer_count }}</td>
             <td>{% if department.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</td>
           </tr>
         {% empty %}

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Access levels{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Access levels</h1>
+    <p class="lede">
+      Each administrator holds one access level, and the level decides what they can do.
+      VMS provides two; you can add your own.
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn" href="{% url 'accounts:admin_list' %}">Administrators</a>
+    <a class="btn btn--primary" href="{% url 'accounts:access_level_create' %}">Add an access level</a>
+  </div>
+</div>
+
+<div class="card card--flush">
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr><th>Name</th><th>Scope</th><th>Can</th><th>Administrators</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for level in levels %}
+          <tr>
+            <td>
+              <strong>{{ level.name }}</strong>
+              {% if level.is_builtin %} <span class="badge badge--info">provided</span>{% endif %}
+              {% if not level.is_active %} <span class="badge badge--muted">Inactive</span>{% endif %}
+              {% if level.description %}<div class="small muted">{{ level.description }}</div>{% endif %}
+            </td>
+            <td class="small">
+              {% if level.is_scoped %}
+                Only their departments
+              {% else %}
+                The whole church
+              {% endif %}
+            </td>
+            <td class="pill-row">
+              {% for capability in level.capabilities %}<span class="badge">{{ capability }}</span>{% endfor %}
+            </td>
+            <td class="small">{{ level.holders }}</td>
+            <td class="right">
+              <a class="btn btn--sm" href="{% url 'accounts:access_level_edit' level.pk %}">Edit</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="small muted">
+  A level limited to particular departments cannot be given the audit trail: an audit
+  entry does not record a department, so there would be nothing to limit it by.
+</p>
+{% endblock %}

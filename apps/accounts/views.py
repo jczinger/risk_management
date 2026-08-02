@@ -20,6 +20,7 @@ BUILD_NOTES §1.20 for why the password path went away.
 
 from __future__ import annotations
 
+import json
 import logging
 
 from django.conf import settings
@@ -27,30 +28,47 @@ from django.contrib import messages
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.core.exceptions import ValidationError
+from django.db import connection, transaction
+from django.db.models import Count, Exists, OuterRef
 from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods, require_POST
 from django_ratelimit.decorators import ratelimit
-from django_ratelimit.exceptions import Ratelimited
+from django_tenants.utils import schema_context
 
 from apps.core import audit
 from apps.core.access import (
     Capability,
+    access_snapshot,
+    another_unscoped_admin_exists,
+    grant_of,
+    no_access_level,
     open_to_any_signed_in_user,
+    own_review_backlog_unlocked_by_removing,
     public_view,
     requires,
+    would_strand_the_church,
 )
-from apps.core.models import AuditAction, diff_summary
+from apps.core.forms import AccessGrantForm, AccessLevelForm, apply_grant
+from apps.core.models import (
+    AccessLevel,
+    AuditAction,
+    UserAccessGrant,
+    diff_summary,
+)
+from apps.org.models import Volunteer
 from apps.tenants.routing import clear_tenant_cookie, find_login_targets, set_tenant_cookie
 
 from . import links as link_service
 from . import webauthn_service
-from .forms import AdminInviteForm, AdminProfileForm, PasskeyLabelForm, RecoveryRequestForm
-from .models import LinkPurpose, User
+from .forms import AdminInviteForm, AdminProfileForm, RecoveryRequestForm
+from .services import attach_volunteer_files, file_for_new_admin, volunteer_from_request
+from .models import LinkPurpose, Passkey, User
 from .webauthn_service import WebAuthnError
 
 logger = logging.getLogger("vms.accounts")
@@ -68,7 +86,6 @@ def _post_login_redirect(request) -> str:
     which only happens when a ``next`` value is actually present, so it hid until
     someone was redirected to the login page rather than going there directly.
     """
-    from django.utils.http import url_has_allowed_host_and_scheme
 
     candidate = request.POST.get("next") or request.GET.get("next") or ""
     if candidate and url_has_allowed_host_and_scheme(
@@ -107,7 +124,7 @@ def _complete_login(request, user: User, method: str) -> HttpResponse:
         AuditAction.LOGIN,
         "User",
         entity_id=user.pk,
-        entity_label=user.get_full_name() or "administrator",
+        entity_label=user.display_name,
         summary=f"Signed in via {method}",
         detail={"method": method},
     )
@@ -169,7 +186,7 @@ def logout_view(request):
             AuditAction.LOGOUT,
             "User",
             entity_id=request.user.pk,
-            entity_label=request.user.get_full_name() or "administrator",
+            entity_label=request.user.display_name,
             summary="Signed out",
         )
     auth_logout(request)
@@ -225,7 +242,7 @@ _RATE_LIMITED_JSON = {
 @require_POST
 def webauthn_authenticate_begin(request):
     """Issue an assertion challenge. No user needed — discoverable credentials."""
-    if _rate_limited(request):
+    if _check_passkey_ratelimit(request):
         return JsonResponse(_RATE_LIMITED_JSON, status=429)
     try:
         options = webauthn_service.begin_authentication(request)
@@ -234,19 +251,12 @@ def webauthn_authenticate_begin(request):
     return HttpResponse(options, content_type="application/json")
 
 
-def _rate_limited(request) -> bool:
-    try:
-        return _check_passkey_ratelimit(request)
-    except Ratelimited:
-        return True
-
-
 @public_view("the passkey sign-in ceremony")
 @never_cache
 @require_POST
 def webauthn_authenticate_finish(request):
     """Verify an assertion and sign the user in."""
-    if _rate_limited(request):
+    if _check_passkey_ratelimit(request):
         return JsonResponse(_RATE_LIMITED_JSON, status=429)
 
     body = request.body.decode("utf-8", errors="replace")
@@ -288,14 +298,29 @@ def webauthn_register_begin(request):
 @open_to_any_signed_in_user("enrolling your own passkey")
 @require_POST
 def webauthn_register_finish(request):
-    """Verify and store a new passkey."""
-    label = request.headers.get("X-Passkey-Label", "")
-    body = request.body.decode("utf-8", errors="replace")
-    if not body:
+    """
+    Verify and store a new passkey.
+
+    The body is ``{"credential": {…}, "label": "…"}``. The label used to ride in an
+    ``X-Passkey-Label`` header, which quietly restricted device names to latin-1: a
+    curly apostrophe — which a phone substitutes for a typed one on its own — made the
+    browser refuse to send the request at all. Amended 2026-08-02.
+    """
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        payload = None
+    if not isinstance(payload, dict) or not isinstance(payload.get("credential"), dict):
         return HttpResponseBadRequest("No passkey response received.")
 
+    label = payload.get("label")
+    if not isinstance(label, str):
+        label = ""
+
     try:
-        passkey = webauthn_service.finish_registration(request, request.user, body, label=label)
+        passkey = webauthn_service.finish_registration(
+            request, request.user, json.dumps(payload["credential"]), label=label
+        )
     except WebAuthnError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
 
@@ -303,7 +328,7 @@ def webauthn_register_finish(request):
         AuditAction.UPDATE,
         "Passkey",
         entity_id=passkey.pk,
-        entity_label=request.user.get_full_name() or "administrator",
+        entity_label=request.user.display_name,
         summary="Passkey registered",
     )
     return JsonResponse({"ok": True, "redirect": reverse("accounts:security")})
@@ -321,7 +346,7 @@ def passkey_remove(request, pk: int):
             AuditAction.UPDATE,
             "Passkey",
             entity_id=pk,
-            entity_label=request.user.get_full_name() or "administrator",
+            entity_label=request.user.display_name,
             summary="Passkey removed",
         )
         messages.success(request, "Passkey removed.")
@@ -383,8 +408,8 @@ def link_consume(request, payload: str):
         AuditAction.LINK_USED,
         "User",
         entity_id=user.pk,
-        entity_label=user.get_full_name() or "administrator",
-        summary=f"{LinkPurpose(link.purpose).label} link used",
+        entity_label=user.display_name,
+        summary=f"{link.get_purpose_display()} link used",
         detail={"purpose": link.purpose},
     )
 
@@ -432,10 +457,7 @@ def recover_request(request):
     rate_limited = False
 
     if request.method == "POST":
-        try:
-            rate_limited = _check_recovery_ratelimit(request)
-        except Ratelimited:
-            rate_limited = True
+        rate_limited = _check_recovery_ratelimit(request)
 
         if not rate_limited and form.is_valid():
             _send_recovery_links(form.cleaned_data["email"])
@@ -475,7 +497,6 @@ def _send_recovery_links(email: str) -> None:
     first church alphabetically and logged a warning, which left the second account
     quietly unreachable.
     """
-    from django_tenants.utils import schema_context
 
     targets = find_login_targets(email)
     if not targets:
@@ -515,7 +536,7 @@ def passkey_required(request):
     if request.user.has_passkey:
         return redirect(settings.LOGIN_REDIRECT_URL)
 
-    return render(request, "accounts/passkey_required.html", {"label_form": PasskeyLabelForm()})
+    return render(request, "accounts/passkey_required.html")
 
 
 # ---------------------------------------------------------------------------
@@ -529,11 +550,41 @@ def security(request):
     return render(
         request,
         "accounts/security.html",
+        {"passkeys": request.user.passkeys.filter(is_active=True)},
+    )
+
+
+def _link_issued_response(request, user, url, purpose, emailed, **flags):
+    """The "here is the link" page every link-minting view ends on."""
+    return render(
+        request,
+        "accounts/link_issued.html",
         {
-            "passkeys": request.user.passkeys.filter(is_active=True),
-            "label_form": PasskeyLabelForm(),
+            "target": user,
+            "url": url,
+            "emailed": emailed,
+            "expires_in": link_service.describe_lifetime(purpose),
+            "is_recovery": purpose == LinkPurpose.RECOVERY,
+            **flags,
         },
     )
+
+
+def _issue_and_show_link(request, user, **flags):
+    """
+    Mint a fresh sign-in link for ``user``, email it, and show it to the requester.
+
+    The purpose follows what the account already has: no passkey yet is still a first
+    sign-in, so this mints another :attr:`LinkPurpose.INVITE` — the seven-day window,
+    no "account recovered" notice to the other admins, because nothing is being
+    recovered. A passkey already on file makes this a :attr:`LinkPurpose.RECOVERY`,
+    with the shorter window and the notice to colleagues that a working credential is
+    being replaced.
+    """
+    purpose = LinkPurpose.RECOVERY if user.has_passkey else LinkPurpose.INVITE
+    _, url = link_service.issue_link(user, purpose, issued_by=request.user)
+    emailed = link_service.send_link(user, url, purpose, church_name=_church_name(request))
+    return _link_issued_response(request, user, url, purpose, emailed, **flags)
 
 
 @open_to_any_signed_in_user("adding a passkey on a different device")
@@ -550,23 +601,7 @@ def security_new_device_link(request):
     to colleagues that a link-based sign-in happened. That notice matters just as much
     here as for an actual lost passkey — it is the same event, whoever asked for it.
     """
-    user = request.user
-    purpose = LinkPurpose.RECOVERY if user.has_passkey else LinkPurpose.INVITE
-    _, url = link_service.issue_link(user, purpose, issued_by=user)
-    emailed = link_service.send_link(user, url, purpose, church_name=_church_name(request))
-
-    return render(
-        request,
-        "accounts/link_issued.html",
-        {
-            "target": user,
-            "url": url,
-            "emailed": emailed,
-            "expires_in": link_service.describe_lifetime(purpose),
-            "is_recovery": purpose == LinkPurpose.RECOVERY,
-            "for_self": True,
-        },
-    )
+    return _issue_and_show_link(request, request.user, for_self=True)
 
 
 @open_to_any_signed_in_user("your own account")
@@ -580,7 +615,7 @@ def profile(request):
             AuditAction.UPDATE,
             "User",
             entity_id=request.user.pk,
-            entity_label=request.user.get_full_name() or "administrator",
+            entity_label=request.user.display_name,
             summary="Own profile updated",
         )
         messages.success(request, "Your details have been updated.")
@@ -602,16 +637,23 @@ def admin_list(request):
     Administrators are no longer all equal — see BUILD_NOTES §1.21 — so this page is
     where a church reads and changes who can do what.
     """
-    from django.db import connection
 
-    from apps.core.models import AccessLevel, UserAccessGrant
 
     if getattr(connection, "schema_name", "public") == "public":
         # The platform console manages churches, not church staff.
         messages.error(request, "Administrator management happens inside a church.")
         return redirect("/")
 
-    admins = list(User.objects.all().order_by("last_name", "first_name"))
+    # ``passkey_registered`` mirrors the ``has_passkey`` property without its
+    # per-row EXISTS query — annotated here because this is the one page that
+    # renders every administrator at once.
+    admins = list(
+        User.objects.annotate(
+            passkey_registered=Exists(
+                Passkey.objects.filter(user=OuterRef("pk"), is_active=True)
+            )
+        ).order_by("last_name", "first_name")
+    )
     grants = {
         grant.user_id: grant
         for grant in UserAccessGrant.objects.select_related("access_level").prefetch_related(
@@ -620,6 +662,8 @@ def admin_list(request):
     }
     for admin in admins:
         admin.grant = grants.get(admin.pk)
+
+    attach_volunteer_files(admins)
 
     return render(
         request,
@@ -632,14 +676,90 @@ def admin_list(request):
 
 
 @requires(Capability.MANAGE_USERS)
+@require_POST
+def admin_link_volunteer(request, pk: int):
+    """
+    Attach an existing volunteer file to an administrator.
+
+    **This is not a back door, and the guard below is what keeps it from being one.**
+    The link is what makes "you may not screen yourself" enforceable, so being able to
+    move your own link at will would be a way out of the rule: point it at a stranger's
+    file and your own becomes fair game again. Choosing your own file is therefore
+    refused while another church-wide administrator exists — the same escape hatch as
+    everywhere else, so a single-administrator church is not stuck.
+
+    There is deliberately no unlink. Detaching is the same escape by another name, and
+    the honest fix for a wrong link is a second administrator correcting it.
+    """
+
+    subject = get_object_or_404(User, pk=pk)
+    volunteer = get_object_or_404(Volunteer, pk=request.POST.get("volunteer"), user_id=None)
+
+    if subject.pk == request.user.pk and another_unscoped_admin_exists(
+        exclude_user_id=request.user.pk
+    ):
+        messages.error(
+            request,
+            "You cannot choose your own screening file. Ask another administrator with "
+            "access to the whole church to link it for you.",
+        )
+        return redirect("accounts:admin_list")
+
+    volunteer.user_id = subject.pk
+    volunteer.save(update_fields=["user_id", "updated_at"])
+    audit.record(
+        AuditAction.UPDATE,
+        "Volunteer",
+        entity_id=volunteer.pk,
+        entity_label=volunteer.full_name,
+        summary=f"Linked to the administrator account for {subject.get_full_name()}",
+    )
+    messages.success(
+        request,
+        f"{volunteer.full_name}'s existing record is now {subject.get_full_name()}'s "
+        "screening file.",
+    )
+    return redirect("accounts:admin_list")
+
+
+@requires(Capability.MANAGE_USERS)
+@require_POST
+def admin_create_volunteer(request, pk: int):
+    """Create a fresh screening file for an administrator who has none."""
+
+    subject = get_object_or_404(User, pk=pk)
+    if Volunteer.objects.filter(user_id=subject.pk).exists():
+        messages.info(request, f"{subject.get_full_name()} already has a volunteer record.")
+        return redirect("accounts:admin_list")
+
+    volunteer = Volunteer.objects.create(
+        first_name=subject.first_name,
+        last_name=subject.last_name,
+        email=subject.email,
+        user_id=subject.pk,
+    )
+    audit.record(
+        AuditAction.CREATE,
+        "Volunteer",
+        entity_id=volunteer.pk,
+        entity_label=volunteer.full_name,
+        summary="Volunteer record created for a screening administrator",
+    )
+    messages.success(
+        request,
+        f"Created a volunteer record for {subject.get_full_name()}. Give them a ministry "
+        "role to start their screening.",
+    )
+    return redirect("org:volunteer_detail", pk=volunteer.pk)
+
+
+@requires(Capability.MANAGE_USERS)
 @require_http_methods(["GET", "POST"])
 def admin_access(request, pk: int):
     """Change one administrator's access level and departments."""
-    from apps.core.forms import AccessGrantForm, apply_grant
-    from apps.core.models import AuditAction as Action
 
     subject = get_object_or_404(User, pk=pk)
-    grant = getattr(subject, "access_grant", None) or _grant_of(subject)
+    grant = grant_of(subject)
 
     initial = {}
     if grant is not None:
@@ -659,21 +779,21 @@ def admin_access(request, pk: int):
         level = form.cleaned_data["access_level"]
         departments = list(form.cleaned_data["departments"])
 
-        blocked = _would_strand_the_church(subject, level)
+        blocked = would_strand_the_church(subject, level)
         if blocked:
             messages.error(request, blocked)
             return redirect("accounts:admin_list")
 
-        before = _access_snapshot(grant)
+        before = access_snapshot(grant)
         apply_grant(
             subject,
             level,
             departments,
             granted_by=request.user,
-            granted_by_display=request.user.get_full_name() or "administrator",
+            granted_by_display=request.user.display_name,
         )
         audit.record(
-            Action.ACCESS_CHANGED,
+            AuditAction.ACCESS_CHANGED,
             "User",
             entity_id=subject.pk,
             entity_label=subject.get_full_name() or f"user #{subject.pk}",
@@ -683,7 +803,7 @@ def admin_access(request, pk: int):
                 if level.is_scoped and departments
                 else ""
             ),
-            detail={"changed": diff_summary(before, _access_snapshot(_grant_of(subject)))},
+            detail={"changed": diff_summary(before, access_snapshot(grant_of(subject)))},
         )
 
         if level.is_scoped and not departments:
@@ -703,73 +823,6 @@ def admin_access(request, pk: int):
     )
 
 
-def _grant_of(user):
-    from apps.core.models import UserAccessGrant
-
-    return (
-        UserAccessGrant.objects.select_related("access_level")
-        .filter(user_id=user.pk)
-        .first()
-    )
-
-
-def _no_access_level():
-    """
-    A stand-in level that grants nothing, for asking "what if this person were gone?".
-
-    Unsaved, so it touches no data. Lets the deactivation path reuse
-    :func:`_would_strand_the_church` rather than restating the same query with the
-    condition inverted.
-    """
-    from apps.core.models import AccessLevel
-
-    return AccessLevel(name="(deactivated)", is_scoped=True, can_manage_users=False)
-
-
-def _access_snapshot(grant) -> dict:
-    if grant is None:
-        return {"access_level": "(none)", "departments": ""}
-    return {
-        "access_level": grant.access_level.name,
-        "departments": ", ".join(sorted(grant.departments.values_list("name", flat=True))),
-    }
-
-
-def _would_strand_the_church(subject, new_level) -> str:
-    """
-    Refuse a change that would leave the church with nobody who can manage access.
-
-    The sibling of the existing "last active administrator" guard, and reopened by access
-    levels: demoting or re-scoping the only unscoped admin who holds ``manage_users``
-    locks the church out of the very screen needed to undo it. The only way back would be
-    an operator with shell access.
-    """
-    from apps.core.models import UserAccessGrant
-
-    still_qualifies = not new_level.is_scoped and new_level.can_manage_users
-    if still_qualifies:
-        return ""
-
-    others = (
-        UserAccessGrant.objects.select_related("access_level")
-        .filter(
-            access_level__is_scoped=False,
-            access_level__can_manage_users=True,
-            access_level__is_active=True,
-        )
-        .exclude(user_id=subject.pk)
-        .values_list("user_id", flat=True)
-    )
-    if User.objects.filter(pk__in=list(others), is_active=True).exists():
-        return ""
-
-    return (
-        f"{subject.get_full_name()} is the only administrator who can manage access for "
-        "the whole church. Give somebody else that access first, or this church would "
-        "have no way to change it back."
-    )
-
-
 @requires(Capability.MANAGE_USERS)
 @require_http_methods(["GET", "POST"])
 def admin_invite(request):
@@ -780,55 +833,77 @@ def admin_invite(request):
     workaround for email not being configured yet: a church may well want to hand it
     over in person, and an invite that silently fails to arrive is worse than one the
     sender can see.
-    """
-    from apps.core.forms import apply_grant
 
-    form = AdminInviteForm(request.POST or None, granting_user=request.user)
+    An administrator is also a person who serves, and Plan to Protect screens people who
+    serve, so this also gives them a volunteer file — see
+    :func:`apps.accounts.services.file_for_new_admin`.
+    ``?volunteer=<pk>`` arrives from the "Make this person an administrator" button on an
+    existing file and means "this is already them", which skips the guessing entirely.
+
+    The whole thing is one transaction. It was not before, and could already leave a
+    ``User`` behind with no access level if the grant failed; three writes made that
+    worth fixing rather than documenting.
+    """
+
+    existing_file = volunteer_from_request(request)
+    initial = {}
+    if existing_file is not None:
+        initial = {
+            "first_name": existing_file.first_name,
+            "last_name": existing_file.last_name,
+            "email": existing_file.email,
+        }
+
+    form = AdminInviteForm(
+        request.POST or None, granting_user=request.user, initial=initial
+    )
 
     if request.method == "POST" and form.is_valid():
         data = form.cleaned_data
         level = data["access_level"]
         departments = list(data["departments"])
 
-        user = User.objects.create_user(
-            email=data["email"],
-            first_name=data["first_name"],
-            last_name=data["last_name"],
-        )
-        apply_grant(
-            user,
-            level,
-            departments,
-            granted_by=request.user,
-            granted_by_display=request.user.get_full_name() or "administrator",
-        )
-        audit.record(
-            AuditAction.CREATE,
-            "User",
-            entity_id=user.pk,
-            entity_label=user.get_full_name(),
-            summary=f"Screening administrator added ({level.name})",
-        )
+        with transaction.atomic():
+            user = User.objects.create_user(
+                email=data["email"],
+                first_name=data["first_name"],
+                last_name=data["last_name"],
+            )
+            apply_grant(
+                user,
+                level,
+                departments,
+                granted_by=request.user,
+                granted_by_display=request.user.display_name,
+            )
+            audit.record(
+                AuditAction.CREATE,
+                "User",
+                entity_id=user.pk,
+                entity_label=user.get_full_name(),
+                summary=f"Screening administrator added ({level.name})",
+            )
+            file_note = file_for_new_admin(user, existing_file)
 
-        _, url = link_service.issue_link(user, LinkPurpose.INVITE, issued_by=request.user)
+            _, url = link_service.issue_link(user, LinkPurpose.INVITE, issued_by=request.user)
+
+        # Outside the transaction: sending mail is not something a rollback can undo, and
+        # a provider timeout should not discard an administrator who was created fine.
         emailed = link_service.send_link(
             user, url, LinkPurpose.INVITE, church_name=_church_name(request)
         )
+        if file_note:
+            messages.warning(request, file_note)
 
-        return render(
-            request,
-            "accounts/link_issued.html",
-            {
-                "target": user,
-                "url": url,
-                "emailed": emailed,
-                "expires_in": link_service.describe_lifetime(LinkPurpose.INVITE),
-                "is_recovery": False,
-                "just_added": True,
-            },
+        return _link_issued_response(
+            request, user, url, LinkPurpose.INVITE, emailed, just_added=True
         )
 
-    return render(request, "accounts/admin_invite.html", {"form": form})
+    return render(
+        request,
+        "accounts/admin_invite.html",
+        {"form": form, "existing_file": existing_file},
+    )
 
 
 def _church_name(request) -> str:
@@ -850,39 +925,40 @@ def admin_toggle_active(request, pk: int):
         messages.error(request, "You cannot deactivate your own account.")
         return redirect("accounts:admin_list")
 
-    if user.is_active and User.objects.filter(is_active=True).count() <= 1:
-        messages.error(
-            request,
-            "This is the last active administrator. Add another before deactivating "
-            "this one, or the church would lose access entirely.",
-        )
-        return redirect("accounts:admin_list")
-
-    # The sibling guard, and one that access levels reopened. A church can now have
-    # several administrators and still no way to change who can do what, because
-    # "manage access church-wide" is a capability rather than something every account
-    # has. Deactivating the last holder of it locks the church out of the screen it
-    # would need to recover, leaving only an operator with shell access.
-    if user.is_active:
-        stranded = _would_strand_the_church(user, _no_access_level())
-        if stranded:
-            messages.error(request, stranded)
+    deactivating = user.is_active
+    if deactivating:
+        # Three refusals, one per way a deactivation could paint the church into a
+        # corner: no administrators at all; nobody left who can manage access (a gap
+        # access levels reopened — "manage access church-wide" is a capability now,
+        # not something every account has); and the actor freeing themselves to
+        # affirm their own review backlog.
+        if User.objects.filter(is_active=True).count() <= 1:
+            refusal = (
+                "This is the last active administrator. Add another before deactivating "
+                "this one, or the church would lose access entirely."
+            )
+        else:
+            refusal = would_strand_the_church(
+                user, no_access_level()
+            ) or own_review_backlog_unlocked_by_removing(request.user, user)
+        if refusal:
+            messages.error(request, refusal)
             return redirect("accounts:admin_list")
 
-    user.is_active = not user.is_active
+    user.is_active = not deactivating
     user.save(update_fields=["is_active"])
 
     audit.record(
-        AuditAction.DEACTIVATE if not user.is_active else AuditAction.REACTIVATE,
+        AuditAction.DEACTIVATE if deactivating else AuditAction.REACTIVATE,
         "User",
         entity_id=user.pk,
         entity_label=user.get_full_name(),
-        summary=("Administrator deactivated" if not user.is_active else "Administrator reactivated"),
+        summary="Administrator deactivated" if deactivating else "Administrator reactivated",
     )
     messages.success(
         request,
         f"{user.get_full_name()} has been "
-        + ("deactivated." if not user.is_active else "reactivated."),
+        + ("deactivated." if deactivating else "reactivated."),
     )
     return redirect("accounts:admin_list")
 
@@ -897,12 +973,7 @@ def admin_reissue_link(request, pk: int):
     app that unfurls it, opened by an email scanner, or just clicked twice) leaves
     them with no way back in except asking whoever runs this console.
 
-    The purpose follows what the account already has: no passkey yet is still a first
-    sign-in, so this mints another :attr:`LinkPurpose.INVITE` — same seven-day window,
-    no "account recovered" notice to the other admins, because nothing is being
-    recovered. A passkey already on file makes this a :attr:`LinkPurpose.RECOVERY`,
-    the same as the self-service form, with that form's shorter window and the notice
-    to colleagues that a working credential is being replaced.
+    How the purpose is chosen — and why — is :func:`_issue_and_show_link`.
     """
     user = get_object_or_404(User, pk=pk)
 
@@ -910,21 +981,7 @@ def admin_reissue_link(request, pk: int):
         messages.error(request, "Reactivate this administrator before issuing a new link.")
         return redirect("accounts:admin_list")
 
-    purpose = LinkPurpose.RECOVERY if user.has_passkey else LinkPurpose.INVITE
-    _, url = link_service.issue_link(user, purpose, issued_by=request.user)
-    emailed = link_service.send_link(user, url, purpose, church_name=_church_name(request))
-
-    return render(
-        request,
-        "accounts/link_issued.html",
-        {
-            "target": user,
-            "url": url,
-            "emailed": emailed,
-            "expires_in": link_service.describe_lifetime(purpose),
-            "is_recovery": purpose == LinkPurpose.RECOVERY,
-        },
-    )
+    return _issue_and_show_link(request, user)
 
 
 # ---------------------------------------------------------------------------
@@ -940,9 +997,7 @@ def admin_reissue_link(request, pk: int):
 @requires(Capability.MANAGE_USERS)
 def access_level_list(request):
     """Every access level at this church, with how many administrators hold each."""
-    from django.db.models import Count
 
-    from apps.core.models import AccessLevel
 
     levels = AccessLevel.objects.annotate(holders=Count("grants"))
     return render(request, "accounts/access_level_list.html", {"levels": levels})
@@ -951,14 +1006,12 @@ def access_level_list(request):
 @requires(Capability.MANAGE_USERS)
 @require_http_methods(["GET", "POST"])
 def access_level_create(request):
-    from apps.core.forms import AccessLevelForm
-    from apps.core.models import AuditAction as Action
 
     form = AccessLevelForm(request.POST or None, user=request.user)
     if request.method == "POST" and form.is_valid():
         level = form.save()
         audit.record(
-            Action.ACCESS_CHANGED,
+            AuditAction.ACCESS_CHANGED,
             "AccessLevel",
             entity_id=level.pk,
             entity_label=level.name,
@@ -974,29 +1027,16 @@ def access_level_create(request):
 @requires(Capability.MANAGE_USERS)
 @require_http_methods(["GET", "POST"])
 def access_level_edit(request, pk: int):
-    from apps.core.forms import AccessLevelForm
-    from apps.core.models import AccessLevel
-    from apps.core.models import AuditAction as Action
 
     level = get_object_or_404(AccessLevel, pk=pk)
-    before = {
-        "name": level.name,
-        "is_scoped": level.is_scoped,
-        "is_active": level.is_active,
-        **{field: getattr(level, field) for field in AccessLevel.CAPABILITY_FIELDS},
-    }
+    before = _level_snapshot(level)
 
     form = AccessLevelForm(request.POST or None, instance=level, user=request.user)
     if request.method == "POST" and form.is_valid():
         form.save()
-        after = {
-            "name": level.name,
-            "is_scoped": level.is_scoped,
-            "is_active": level.is_active,
-            **{field: getattr(level, field) for field in AccessLevel.CAPABILITY_FIELDS},
-        }
+        after = _level_snapshot(level)
         audit.record(
-            Action.ACCESS_CHANGED,
+            AuditAction.ACCESS_CHANGED,
             "AccessLevel",
             entity_id=level.pk,
             entity_label=level.name,
@@ -1012,3 +1052,13 @@ def access_level_edit(request, pk: int):
         return redirect("accounts:access_level_list")
 
     return render(request, "accounts/access_level_form.html", {"form": form, "level": level})
+
+
+def _level_snapshot(level) -> dict:
+    """What the audit diff compares — the name, both flags, every capability."""
+    return {
+        "name": level.name,
+        "is_scoped": level.is_scoped,
+        "is_active": level.is_active,
+        **{field: getattr(level, field) for field in AccessLevel.CAPABILITY_FIELDS},
+    }

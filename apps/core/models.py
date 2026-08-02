@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -118,6 +119,27 @@ class AuditAction(models.TextChoices):
     KEY_BACKUP = "key_backup", "Encryption key backed up"
     NOTIFY = "notify", "Notification sent"
     SEED = "seed", "Template seeded"
+    # Its own action rather than a generic update on the User row: "who widened whose
+    # access, and when" is the first question asked after anything goes wrong, and it
+    # should not have to be picked out of a list of profile edits.
+    ACCESS_CHANGED = "access_changed", "Access level changed"
+    # The review gate. Each of these answers a question the trail is actually asked, and
+    # none of them is answerable from the others:
+    #   opened     — which figures went in unverified, and when
+    #   affirmed   — who signed off, and on what
+    #   sent_back  — the entry a department admin is meant to read, with the reason
+    #   superseded — which unverified entries were never reviewed because they were
+    #                overwritten, which is a gap in the sign-off record rather than a
+    #                decision anybody made
+    # Kept out of the mutable ReviewItem table as well as in it, because that table can
+    # be edited and the trail cannot.
+    REVIEW_OPENED = "review_opened", "Recorded, pending affirmation"
+    REVIEW_AFFIRMED = "review_affirmed", "Affirmed by a primary admin"
+    REVIEW_SENT_BACK = "review_sent_back", "Sent back for correction"
+    REVIEW_SUPERSEDED = "review_superseded", "Superseded before review"
+    # The criminal record check's analogue of WAIVER_REVERSED, and worth its own action for
+    # the same reason: a retracted clearance is exactly what somebody filters for.
+    CRC_NOT_AFFIRMED = "crc_not_affirmed", "Criminal record check retracted"
 
 
 class AuditEventQuerySet(models.QuerySet):
@@ -205,6 +227,269 @@ class AuditEvent(models.Model):
             return json.loads(self.detail)
         except (ValueError, TypeError):
             return {}
+
+
+# ---------------------------------------------------------------------------
+# Access levels
+# ---------------------------------------------------------------------------
+
+
+class AccessLevel(TimeStampedModel):
+    """
+    A named set of capabilities, optionally limited to particular departments.
+
+    Called an "access level" and not a role because ``org.Role`` already means a
+    *ministry* position — Sunday School Teacher, Nursery Helper — and the two sit
+    beside each other in the same screens. See BUILD_NOTES §1.21.
+
+    Two levels are seeded into every church. **Primary Admin** is what every admin
+    used to be: everything, church-wide. **Department Admin** is scoped, and is
+    reviewed — see :mod:`apps.review`.
+
+    Why the capabilities are columns rather than a JSON list or Django's own
+    ``auth.Permission``:
+
+    * ``django.contrib.auth`` is in both SHARED_APPS and TENANT_APPS, so
+      ``auth_permission`` exists twice and ``user.has_perm()`` would answer a
+      different question depending on which schema is bound. Two sources of truth
+      for one question is not a foundation to build authorisation on.
+    * Django's permissions are per-model CRUD. ``can_record_screening`` spans five
+      models and one product idea; the mapping would be ours to maintain anyway.
+    * Columns get ``help_text``, which is where a church reads what a capability
+      does *not* include. That is load-bearing here, not decoration.
+    * Columns are filterable, which both the escalation rule and the lockout guard
+      need.
+
+    The cost, stated plainly: the set of capabilities is closed, and a church cannot
+    invent one. That is the right trade, because a capability with no code enforcing
+    it is a lie.
+    """
+
+    #: The stable key. Seeding and comparison match on this, never on ``name`` — a
+    #: church will rename "Department Admin" to "Ministry Leader", and a seeder that
+    #: matched on the display name would then create a duplicate.
+    PRIMARY_ADMIN = "primary-admin"
+    DEPARTMENT_ADMIN = "department-admin"
+
+    name = models.CharField(max_length=150, unique=True)
+    slug = models.SlugField(max_length=60, unique=True, editable=False)
+    description = models.TextField(
+        blank=True,
+        help_text="Shown to whoever is choosing an access level for an administrator.",
+    )
+
+    is_scoped = models.BooleanField(
+        default=True,
+        verbose_name="limited to particular departments",
+        help_text=(
+            "When set, someone holding this level sees only volunteers who have served "
+            "in the departments they are given. When unset, they see the whole church."
+        ),
+    )
+    is_builtin = models.BooleanField(
+        default=False,
+        editable=False,
+        help_text="Seeded by VMS. Cannot be removed, though its capabilities can be changed.",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Unset instead of deleting, so administrators who held it still resolve.",
+    )
+
+    can_view_volunteers = models.BooleanField(
+        default=True,
+        verbose_name="see volunteer records",
+        help_text="Read the volunteer file, the dashboard, reports and stored documents.",
+    )
+    can_edit_volunteers = models.BooleanField(
+        default=False,
+        verbose_name="add and edit volunteers",
+        help_text="Create a volunteer, correct their details, and mark them as no longer serving.",
+    )
+    can_manage_assignments = models.BooleanField(
+        default=False,
+        verbose_name="assign volunteers to ministry roles",
+        help_text=(
+            "Put a volunteer into a role and end an assignment. On a limited level this "
+            "also adds that volunteer to what the holder can see, permanently."
+        ),
+    )
+    can_record_screening = models.BooleanField(
+        default=False,
+        verbose_name="record screening progress",
+        help_text=(
+            "Mark requirements complete, record documents, waive a requirement, and "
+            "record a leadership override."
+        ),
+    )
+    can_record_crc = models.BooleanField(
+        default=False,
+        verbose_name="record criminal record checks",
+        help_text=(
+            "Record a check's outcome, and the convictions behind a Not Clear result. "
+            "Recording a disqualifying conviction is permanent and cannot be undone."
+        ),
+    )
+    can_manage_org = models.BooleanField(
+        default=False,
+        verbose_name="create departments and ministry roles",
+        help_text="Add and edit the church's departments and the roles within them.",
+    )
+    can_manage_requirements = models.BooleanField(
+        default=False,
+        verbose_name="define requirements",
+        help_text="Change what this church requires of its volunteers, and of which roles.",
+    )
+    can_view_audit = models.BooleanField(
+        default=False,
+        verbose_name="read the audit trail",
+        help_text=(
+            "The trail and the sent-email log. Cannot be combined with a level limited "
+            "to particular departments: an audit entry does not record a department, so "
+            "there is nothing to limit it by."
+        ),
+    )
+    can_manage_users = models.BooleanField(
+        default=False,
+        verbose_name="manage administrators and access levels",
+        help_text=(
+            "Invite and deactivate administrators, and edit access levels. Nobody can "
+            "grant an access level wider than their own."
+        ),
+    )
+
+    #: Ordered, and the single source of truth for "what capabilities exist".
+    #: ``apps.core.access.Capability`` is checked against it by a test in both
+    #: directions, so neither can drift.
+    CAPABILITY_FIELDS: tuple[str, ...] = (
+        "can_view_volunteers",
+        "can_edit_volunteers",
+        "can_manage_assignments",
+        "can_record_screening",
+        "can_record_crc",
+        "can_manage_org",
+        "can_manage_requirements",
+        "can_view_audit",
+        "can_manage_users",
+    )
+
+    class Meta:
+        ordering = ("is_scoped", "name")
+        verbose_name = "access level"
+        verbose_name_plural = "access levels"
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        super().clean()
+        # Structural, not a preference. AuditEvent has no department and cannot get
+        # one: its pointer to the affected row is a pair of strings, deliberately, so
+        # there is no queryable path from an entry to a department. A partial filter
+        # would be worse than none, because it would *look* scoped while missing every
+        # RequirementInstance, Document and CRCRecord entry about the same person.
+        if self.is_scoped and self.can_view_audit:
+            raise ValidationError(
+                {
+                    "can_view_audit": (
+                        "The audit trail cannot be limited to a department, because an "
+                        "audit entry does not record one. Either remove the department "
+                        "limit or leave the audit trail unticked."
+                    )
+                }
+            )
+
+    def capabilities(self) -> frozenset[str]:
+        """The capability names this level grants, without the ``can_`` prefix."""
+        return frozenset(
+            field[len("can_") :] for field in self.CAPABILITY_FIELDS if getattr(self, field)
+        )
+
+    def covers(self, other: "AccessLevel") -> bool:
+        """
+        Whether this level is at least as wide as ``other`` in both dimensions.
+
+        Deliberately not an integer rank. A church may legitimately create levels that
+        are genuinely incomparable — a "Requirements Editor" is neither above nor below
+        a "Department Admin" — and forcing a total order onto them is exactly where a
+        privilege-escalation bug hides. Superset of capabilities, and no narrower in
+        scope; anything else is "no".
+        """
+        if not other.capabilities() <= self.capabilities():
+            return False
+        # An unscoped level covers a scoped one; a scoped level never covers an
+        # unscoped one. Two scoped levels are compared on departments by the caller,
+        # which is the only place that knows the granting user's own department set.
+        return not (self.is_scoped and not other.is_scoped)
+
+
+class UserAccessGrant(TimeStampedModel):
+    """
+    One administrator's access level, and the departments it applies to.
+
+    Lives in ``apps.core`` (TENANT_APPS only) rather than on the ``User`` model,
+    and that is a schema constraint rather than a style choice. ``apps.accounts`` is
+    in **both** app lists, so its migrations also run against ``public``; ``apps.org``
+    is tenant-only, so ``org_department`` does not exist there. A ``ManyToManyField``
+    from ``accounts.User`` to ``org.Department`` would therefore try to create a join
+    table in ``public`` referencing a table that is not there, and every deploy would
+    fail on its first step.
+
+    ``user_id`` is a plain integer rather than a ``OneToOneField``, and that is worth
+    explaining because a real foreign key looks like it should work. It does create
+    cleanly — the constraint is built while ``search_path`` is ``"<tenant>", public``,
+    where ``accounts_user`` exists. What breaks is **deletion**. A relation gives
+    ``User`` a reverse accessor, and that accessor is a Python-level fact present in
+    every schema, including ``public`` where ``core_useraccessgrant`` does not exist.
+    So Django's cascade collector walks it on any ``User.delete()`` in the public
+    schema and raises ``UndefinedTable`` — which is precisely how this was found, in
+    the console tests' teardown.
+
+    That is the deeper reason the rest of this codebase denormalises its user
+    references (``AuditEvent.actor_user_id``, ``Document.uploaded_by``,
+    ``DisqualifyingConviction.recorded_by``) rather than pointing a foreign key at
+    ``User`` from a tenant app. The stated reason there is label durability; this is
+    the other half of it.
+
+    The cost is that a deleted user leaves an orphaned grant. Harmless: accounts are
+    deactivated rather than deleted throughout VMS, and :func:`apps.core.access.grant_for`
+    looks a grant up by user id, so an orphan is simply never read.
+
+    One level per user, not many. Two would force a union rule for capabilities and a
+    union-or-intersection rule for departments, and that ambiguity is where a leak
+    hides. ``unique=True`` is what enforces it, in place of the one-to-one.
+    """
+
+    user_id = models.IntegerField(
+        unique=True,
+        db_index=True,
+        help_text="The administrator's primary key in this schema's accounts_user table.",
+    )
+    access_level = models.ForeignKey(
+        AccessLevel,
+        on_delete=models.PROTECT,
+        related_name="grants",
+        help_text="What this administrator may do.",
+    )
+    departments = models.ManyToManyField(
+        "org.Department",
+        blank=True,
+        related_name="access_grants",
+        help_text=(
+            "Only used when the access level is limited to particular departments. "
+            "A limited level with no departments selected sees nothing."
+        ),
+    )
+    #: Denormalised, following AuditEvent's actor: the record of who granted this
+    #: should stay readable after that person's account is deactivated.
+    granted_by_display = models.CharField(max_length=150, blank=True)
+
+    class Meta:
+        verbose_name = "access grant"
+        verbose_name_plural = "access grants"
+
+    def __str__(self):
+        return f"user #{self.user_id} → {self.access_level_id}"
 
 
 # `record()` and `diff_summary()` live in apps.core.audit, alongside the actor

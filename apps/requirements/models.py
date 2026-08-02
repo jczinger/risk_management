@@ -389,7 +389,10 @@ class RequirementDefinition(TimeStampedModel, NoDeleteModel):
         if self.applies_to == AppliesTo.ALL_ROLES:
             return True
         if self.applies_to == AppliesTo.SPECIFIC_ROLES:
-            return self.roles.filter(pk=role.pk).exists()
+            # Iterate rather than .filter().exists(): the sync loop prefetches
+            # ``roles``, and a fresh filter would bypass that cache — one extra query
+            # per (definition × role) on every sync, including the nightly sweep.
+            return any(r.pk == role.pk for r in self.roles.all())
         if self.applies_to == AppliesTo.LEADERSHIP:
             return role.is_leadership
         return False
@@ -522,38 +525,18 @@ class RequirementDefinition(TimeStampedModel, NoDeleteModel):
 
 
 class RequirementInstanceQuerySet(NoDeleteQuerySet):
-    def outstanding(self):
-        return self.filter(status__in=RequirementStatus.outstanding_values())
+    def ever_in_departments(self, department_ids):
+        """
+        Instances belonging to volunteers who have **ever** served in these departments.
 
-    def satisfied(self):
-        return self.filter(status__in=RequirementStatus.satisfied_values())
-
-    def overdue(self, as_of: datetime.date | None = None):
-        as_of = as_of or timezone.localdate()
+        Access scoping, not reporting: no ``is_active`` filter, because a permission
+        covers everyone a department has ever held. See
+        :meth:`apps.org.models.VolunteerQuerySet.ever_in_departments` for why that
+        breadth is deliberate.
+        """
         return self.filter(
-            models.Q(status=RequirementStatus.OVERDUE)
-            | models.Q(
-                status=RequirementStatus.COMPLETE,
-                expires_on__lt=as_of,
-            )
-        )
-
-    def due_soon(self, within_days: int = DUE_SOON_DAYS, as_of: datetime.date | None = None):
-        as_of = as_of or timezone.localdate()
-        return self.filter(
-            status=RequirementStatus.COMPLETE,
-            expires_on__gte=as_of,
-            expires_on__lte=as_of + datetime.timedelta(days=within_days),
-        )
-
-    def for_department(self, department):
-        return self.filter(
-            volunteer__assignments__role__department=department,
-            volunteer__assignments__is_active=True,
+            volunteer__assignments__role__department_id__in=department_ids
         ).distinct()
-
-    def active_volunteers(self):
-        return self.filter(volunteer__is_active=True)
 
 
 class RequirementInstance(TimeStampedModel, NoDeleteModel):
@@ -656,10 +639,6 @@ class RequirementInstance(TimeStampedModel, NoDeleteModel):
             raise ValidationError(errors)
 
     # -- Derived state ----------------------------------------------------
-
-    @property
-    def is_satisfied(self) -> bool:
-        return self.status in RequirementStatus.satisfied_values() and not self.is_expired
 
     @property
     def is_expired(self) -> bool:
@@ -906,10 +885,6 @@ class CRCRecord(TimeStampedModel, NoDeleteModel):
     @property
     def is_cleared(self) -> bool:
         return self.result == CRCResult.CLEARED
-
-    @property
-    def has_disqualifier(self) -> bool:
-        return self.convictions.filter(is_automatic_disqualifier=True).exists()
 
 
 class DisqualifyingConviction(TimeStampedModel):

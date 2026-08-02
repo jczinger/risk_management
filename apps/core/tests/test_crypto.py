@@ -57,9 +57,17 @@ class CryptoPrimitiveTests(SimpleTestCase):
         self.assertEqual(len(tokens), 20)
 
     def test_ciphertext_does_not_contain_plaintext(self):
-        token = encrypt_text("sensitive-value-42", self.key)
+        """
+        The marker has to be long enough not to appear by luck.
+
+        This used to look for ``"42"`` in the base64 body — two characters out of a
+        64-symbol alphabet, across roughly sixty overlapping positions, so it collided
+        about one run in seventy and failed a suite that had nothing wrong with it.
+        Eight characters puts the odds past caring.
+        """
+        token = encrypt_text("sensitive-value-DEADBEEF", self.key)
         self.assertNotIn("sensitive", token)
-        self.assertNotIn("42", token.split(".", 1)[1])
+        self.assertNotIn("DEADBEEF", token.split(".", 1)[1])
 
     def test_wrong_key_is_rejected_not_garbled(self):
         """

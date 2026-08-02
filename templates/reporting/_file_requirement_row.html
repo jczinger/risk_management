@@ -1,0 +1,17 @@
+{% comment %}
+One requirement row of the printed Ministry Personnel file. Shared by the
+onboarding and recurring loops so the two can never drift — a waived recurring
+requirement carries the same "waived by" note as a waived onboarding one.
+{% endcomment %}
+<tr>
+  <td>{{ instance.definition.name }}</td>
+  <td class="small">{{ instance.definition.appendix_reference|default:"—" }}</td>
+  <td class="small nowrap">{{ instance.definition.cadence_display }}</td>
+  <td>
+    {{ instance.get_status_display }}{% if instance.unverified_review %} <span class="badge badge--warn">unverified</span>{% endif %}
+    {% if instance.not_applicable_reason %}<div class="row-note">{{ instance.not_applicable_reason }}</div>{% endif %}
+    {% if instance.status == "waived" %}<div class="row-note">waived by {{ instance.waived_by }} on {{ instance.waived_on|date:"j M Y" }}</div>{% endif %}
+  </td>
+  <td class="nowrap">{{ instance.completed_on|date:"j M Y"|default:"—" }}</td>
+  <td class="nowrap">{{ instance.effective_due_date|date:"j M Y"|default:"—" }}</td>
+</tr>

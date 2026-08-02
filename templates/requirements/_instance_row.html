@@ -48,12 +48,24 @@ Expects: instance, volunteer. Optional: print_view.
       <span class="badge badge--muted">Not started</span>
     {% endif %}
 
+    {% comment %}
+    Shown in the printed file as well as on screen — unlike the action buttons below.
+    An unverified figure is material to whoever reads the printed file, and hiding it
+    there would make the print a more confident document than the screen it came from.
+    {% endcomment %}
+    {% if instance.unverified_review %}
+      <span class="badge badge--warn"
+            title="Recorded by {{ instance.unverified_review.recorded_by_display }} and not yet affirmed by a primary administrator">
+        Unverified
+      </span>
+    {% endif %}
+
     {% if not print_view %}
       {% if instance.definition.is_crc %}
-        {% if volunteer.is_active and not volunteer.is_permanently_disqualified and instance.status != "not_applicable" %}
+        {% if volunteer.is_active and not volunteer.is_permanently_disqualified and instance.status != "not_applicable" and can.record_crc and may_record %}
           <a class="btn btn--sm btn--primary" href="{% url 'requirements:crc_create' volunteer.pk %}">Record check</a>
         {% endif %}
-      {% elif instance.status != "not_applicable" and instance.status != "blocked" %}
+      {% elif instance.status != "not_applicable" and instance.status != "blocked" and can.record_screening and may_record %}
 
         {# RequirementInstance.can_mark_complete carries the rule; see it for the why. #}
         {% if instance.can_mark_complete %}
@@ -79,7 +91,7 @@ Expects: instance, volunteer. Optional: print_view.
         {% endif %}
       {% endif %}
 
-      {% if instance.definition.requires_document %}
+      {% if instance.definition.requires_document and can.record_screening and may_record %}
         <a class="btn btn--sm btn--primary" href="{% url 'documents:create' volunteer.pk %}?instance={{ instance.pk }}">
           {% if instance.status == "complete" %}Replace document{% else %}Add document{% endif %}
         </a>

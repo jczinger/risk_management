@@ -12,7 +12,7 @@
     </p>
   </div>
   <div class="actions">
-    <a class="btn btn--primary" href="{% url 'org:volunteer_create' %}">Add a volunteer</a>
+    {% if can.edit_volunteers %}<a class="btn btn--primary" href="{% url 'org:volunteer_create' %}">Add a volunteer</a>{% endif %}
   </div>
 </div>
 

@@ -35,11 +35,8 @@
     return input ? input.value : "";
   }
 
-  async function postJSON(url, body, extraHeaders) {
-    const headers = Object.assign(
-      { "X-CSRFToken": csrfToken(), "X-Requested-With": "fetch" },
-      extraHeaders || {}
-    );
+  async function postJSON(url, body) {
+    const headers = { "X-CSRFToken": csrfToken(), "X-Requested-With": "fetch" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
 
     const response = await fetch(url, {
@@ -139,6 +136,11 @@
         );
       case "AbortError":
         return "That request was interrupted. Please try again.";
+      case "TypeError":
+        // A failed fetch. Safari renders this as the bare words "Type error", Chrome as
+        // "Failed to fetch" — neither of which an administrator can act on, and one of
+        // which was reported to us as the whole of the error message.
+        return "Could not reach the server. Check your connection and try again.";
       default:
         return err.message || "Something went wrong. Please try again.";
     }
@@ -200,14 +202,22 @@
       });
       if (!credential) throw new Error("No passkey was created.");
 
+      // The label travels in the body, not a header. Header values must be ISO-8859-1
+      // bytes, and a phone's keyboard turns a typed apostrophe into a curly one (U+2019)
+      // without being asked — so "Grammy's" made fetch throw a bare TypeError before the
+      // request ever left the browser. Any name outside latin-1 did the same.
       const result = await postJSON(
         config.finishUrl,
-        JSON.stringify(encodeRegistration(credential)),
-        { "X-Passkey-Label": labelInput ? labelInput.value : "" }
+        JSON.stringify({
+          credential: encodeRegistration(credential),
+          label: labelInput ? labelInput.value : "",
+        })
       );
       setStatus(status, "Passkey registered.", "success");
       window.location.href = (result && result.redirect) || config.fallbackRedirect || "/";
     } catch (err) {
+      // The wording above is deliberately plain; keep the real error for support.
+      if (window.console) console.error("Passkey registration failed", err);
       setStatus(status, friendlyError(err), "danger");
       if (button) button.disabled = false;
     }

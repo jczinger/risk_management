@@ -1,0 +1,17 @@
+{% comment %}
+The passkey-registration block: label field, button, status line. Shared by the
+security page and the enrolment wall so the ceremony wiring exists once.
+
+Parameters (all optional):
+  helptext     — the note under the label field
+  button_class — extra classes on the register button (e.g. "btn--lg btn--block")
+{% endcomment %}
+<div class="field">
+  <label for="passkey-label">Name this device</label>
+  <input type="text" id="passkey-label" placeholder="e.g. work laptop, phone" maxlength="100">
+  <span class="helptext">{{ helptext|default:"Optional, but it makes the list readable when you add a second." }}</span>
+</div>
+<button type="button" id="passkey-register" class="btn btn--primary{% if button_class %} {{ button_class }}{% endif %}">
+  Register a passkey
+</button>
+<div id="passkey-status" class="hidden mt1" role="status" aria-live="polite"></div>

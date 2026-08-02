@@ -11,9 +11,17 @@ Two things here are load-bearing for the rest of the system:
 * **Role flags.** ``is_leadership`` is the only one, and it marks a leadership position —
   screened exactly like anyone else (Build Spec §3), the flag only records what the
   position *is*. Requirements match roles through it, so it is plaintext and queryable.
-  It grants access to nothing: every screening admin at a church sees that church's whole
-  file, and there are no volunteer or leader logins at all. Every role is treated as a
+  It grants access to nothing, and that stays true now that access levels exist — what an
+  administrator may see is set by their :class:`apps.core.models.AccessLevel`, and being a
+  *leadership* role in the ministry sense confers nothing in the application. Worth
+  keeping straight because the two ideas now sit next to each other: an access level says
+  what an **administrator** can do, a leadership flag says what a **volunteer's position**
+  is. There are still no volunteer or leader logins at all. Every role is treated as a
   position of trust and as handling personal information, so neither is a flag.
+* **A volunteer may be an administrator.** ``Volunteer.user_id`` points at the account, and
+  it is what lets VMS refuse to let somebody record their own screening. It is *not* a
+  login: the direction is administrator-has-a-file, never file-can-sign-in, and the line
+  above stays true. See :func:`apps.core.access.may_record_against` and BUILD_NOTES §1.22.
 * **The volunteer's date of birth is split.** ``birth_year`` and ``birth_month`` are
   plaintext integers, because the age rules have to be *queryable* — a nightly job
   finds everyone turning 18 this month. The full date is a separate encrypted field.
@@ -68,18 +76,6 @@ class Department(TimeStampedModel, NoDeleteModel):
     def get_absolute_url(self):
         return reverse("org:department_detail", args=[self.pk])
 
-    @property
-    def active_volunteer_count(self) -> int:
-        return (
-            Volunteer.objects.filter(
-                assignments__role__department=self,
-                assignments__is_active=True,
-                is_active=True,
-            )
-            .distinct()
-            .count()
-        )
-
 
 class Role(TimeStampedModel, NoDeleteModel):
     """
@@ -133,10 +129,6 @@ class Role(TimeStampedModel, NoDeleteModel):
     def get_absolute_url(self):
         return reverse("org:role_detail", args=[self.pk])
 
-    @property
-    def active_assignment_count(self) -> int:
-        return self.assignments.filter(is_active=True).count()
-
 
 class VolunteerQuerySet(NoDeleteQuerySet):
     """Query helpers that stay on the plaintext side of the encryption split."""
@@ -153,9 +145,40 @@ class VolunteerQuerySet(NoDeleteQuerySet):
             assignments__role__department=department, assignments__is_active=True
         ).distinct()
 
+    def ever_in_departments(self, department_ids):
+        """
+        Volunteers who have **ever** held a role in one of these departments.
+
+        The sibling of :meth:`in_department`, and deliberately next to it, because the
+        difference is one clause and picking the wrong one is silent. ``in_department``
+        filters ``assignments__is_active=True`` and answers "who is serving here now?" —
+        the question a report filter asks. This one omits that clause and answers "whose
+        file belongs to this department?" — the question *access scoping* asks.
+
+        The distinction is a product decision, not an oversight: a department admin keeps
+        access to the files they worked on after the volunteer stops serving, because
+        records involving minors are retained permanently and somebody may have to answer
+        a question about a past volunteer years later. One consequence follows and is
+        intended — scope only ever grows. See BUILD_NOTES §1.21.
+        """
+        return self.filter(assignments__role__department_id__in=department_ids).distinct()
+
     def blocked(self):
         """Volunteers barred from positions of trust (disqualified or CRC not clear)."""
         return self.filter(screening_block__in=ScreeningBlock.blocking_values())
+
+    def possible_matches_for(self, first_name: str, last_name: str):
+        """
+        Existing files that might already be this person.
+
+        Name-only, because that is all there is: ``email`` is encrypted with a fresh
+        nonce per value, so it cannot be compared without decrypting every row. Used to
+        *refuse to guess* when an administrator is created — never to merge anything.
+        """
+        return self.filter(
+            first_name__iexact=(first_name or "").strip(),
+            last_name__iexact=(last_name or "").strip(),
+        )
 
     def search_by_name(self, term: str):
         """
@@ -285,6 +308,33 @@ class Volunteer(TimeStampedModel, NoDeleteModel):
         help_text="Untick when someone stops serving. The file is always retained.",
     )
     stopped_serving_on = models.DateField(null=True, blank=True)
+
+    # --- The administrator this file belongs to, if any ----------------------
+    #
+    # A plain integer, deliberately, and **not** a ``OneToOneField`` to ``User``. The
+    # relation creates cleanly; what breaks is deletion. A relation gives ``User`` a
+    # reverse accessor, and that accessor is a Python-level fact present in every schema
+    # — including ``public``, where ``org_volunteer`` does not exist. Django's cascade
+    # collector walks it on ``User.delete()`` and the delete dies with ``UndefinedTable``
+    # in code that has nothing to do with volunteers. ``UserAccessGrant.user_id``
+    # (apps/core/models.py) carries the same scar and the same comment; it cost 74
+    # failing tests to learn once.
+    #
+    # ``unique`` with ``null=True`` is exactly the constraint wanted: Postgres permits
+    # many NULLs in a unique index, so this reads "at most one file per administrator,
+    # and most files belong to nobody".
+    user_id = models.IntegerField(
+        null=True,
+        blank=True,
+        unique=True,
+        db_index=True,
+        editable=False,
+        verbose_name="linked administrator",
+        help_text=(
+            "Set when this volunteer is also a screening administrator. Nobody may "
+            "record screening against their own file while somebody else could."
+        ),
+    )
 
     objects = VolunteerQuerySet.as_manager()
 
@@ -478,16 +528,6 @@ class Volunteer(TimeStampedModel, NoDeleteModel):
     @property
     def active_roles(self):
         return Role.objects.filter(assignments__volunteer=self, assignments__is_active=True)
-
-    @property
-    def active_departments(self):
-        return Department.objects.filter(
-            roles__assignments__volunteer=self, roles__assignments__is_active=True
-        ).distinct()
-
-    @property
-    def needs_leadership_screening(self) -> bool:
-        return self.active_roles.filter(is_leadership=True).exists()
 
     # -- Waiting period ---------------------------------------------------
 

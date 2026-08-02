@@ -2,7 +2,7 @@
 
 Every criterion, how it was verified, and where to re-run that verification.
 
-**Automated:** 545 tests, 86% statement coverage of `apps/`.
+**Automated:** 748 tests, 86% statement coverage of `apps/`.
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -24,6 +24,9 @@ Two churches are really provisioned, then isolation is attacked from several dir
 - A volunteer created in one church is invisible in the other.
 - A primary key taken from one church resolves to nothing in the other.
 - Administrators, audit trails and requirement edits are all scoped to their own church.
+- **Within** a church, an administrator on a limited access level reaches only volunteers who
+  have served in the departments they administer. Anything else returns 404, not 403 — a 403
+  would confirm the record exists. Added 2026-07-29; see §3 below and BUILD_NOTES §1.21.
 - **One church's key cannot decrypt another's data.** A ciphertext is read directly out of
   `alpha.org_volunteer` with raw SQL, decrypts correctly with alpha's key, and raises
   `DecryptionError` with beta's — so even bypassing schema separation entirely does not help.
@@ -337,6 +340,58 @@ domains are separated, and that re-saving a model does not double-encrypt.
 
 ---
 
+---
+
+## 13. Access levels within a church
+
+**Superseded 2026-07-29.** Build Spec §2 read "All have equal permissions within their church,"
+and the acceptance criterion followed it. ~~Every screening admin at a church can reach every
+screen and every volunteer in it.~~ That now describes a **Primary Admin** only.
+
+The criteria in its place:
+
+- **Two levels are seeded into every church**, and into every church that already existed — the
+  backfill migration creates both, so no operator step is needed before the feature can be used.
+- **Every existing administrator came out of the deploy as a Primary Admin.** Verified with
+  `manage.py access_levels`, which reports rather than changes anything.
+- **An account with no access level can do nothing.** `has_capability` fails closed. This is why
+  the backfill is a migration and not a command.
+- **Every church-side view declares what capability it needs.** A view that declares nothing is
+  refused at runtime by `AccessGateMiddleware` and named at review time by a test that walks the
+  URLconf. Both, because their weaknesses do not overlap.
+- **A limited level sees only its own departments** — volunteers, departments, ministry roles,
+  documents, requirement instances, dashboard counts, the per-department summary, and the
+  department and role dropdowns. The dropdowns are included deliberately: the results would be
+  empty anyway, and an unscoped dropdown is the church's org chart with no view behind it.
+- **Out of scope is 404; a withheld capability is 403.**
+- **Nobody can grant access wider than their own**, nor departments they do not administer.
+  Enforced by the form's querysets and again in `apply_grant`.
+- **A limited level cannot hold the audit trail.** Refused by `AccessLevel.clean()`, because an
+  audit entry records no department and a partial filter would look scoped while missing most of
+  what it should catch.
+- **A church cannot lose the ability to change its own access.** The last active administrator
+  with church-wide user management cannot be deactivated, demoted or re-scoped.
+- **The nightly digest reaches unscoped administrators only.** Otherwise one shared body naming
+  every overdue volunteer at the church would cross the boundary invisibly.
+
+### The review step
+
+- **Everything recorded on a limited level is affirmed by a Primary Admin** — completions,
+  documents, criminal record checks, waivers and overrides.
+- **A pending entry counts as compliant immediately**, flagged unverified. Deliberate; the
+  backlog therefore appears on the dashboard, in the queue, on the compliance report, and in the
+  nightly digest once anything has waited 30 days.
+- **The badge appears on every render path**, including the htmx row swap and the printed file.
+- **Sending an entry back requires a reason**, which reaches the audit summary where the
+  recording administrator can actually read it.
+- **A send-back never undoes what is permanent.** A recorded document is kept and marked not
+  current; a leadership override stands; a permanent disqualification, its convictions and the
+  assignments it ended all stand. The form says which of these apply *before* the click.
+- **Nobody affirms their own entry** while another church-wide administrator exists.
+- **Neither the nightly sweep nor any management command queues anything for review.**
+
+---
+
 ## Not built, per Build Spec §0
 
 Confirmed absent: in-app forms and e-signature; Markdown role-description editing, versioning or
@@ -355,6 +410,36 @@ No Plan to Protect® copyrighted text is embedded. The seed template carries req
 **cadences** and **appendix references** only; every `description` is operational guidance written
 for this system, telling an admin what to do in VMS. Asserted by
 `test_template_contains_no_policy_prose`.
+
+## 14. Separation of duties
+
+Added 2026-08-02. Nothing previously connected an administrator's account to their own volunteer
+record, so no criterion here could be stated about self-screening; see BUILD_NOTES §1.22.
+
+- **An administrator has a volunteer record.** Created automatically with the account, from their
+  name and address, with no ministry role until somebody gives them one.
+- **VMS never guesses at a name match.** Where a volunteer already exists under that name, nothing
+  is created and the administrators list offers an explicit link-or-create choice.
+- **Nobody records screening against their own file** — not editing it, not assigning their own
+  roles, not completing their own requirements, not their own criminal record check, not their own
+  documents. Refused at each view and again in the screening services.
+- **The last church-wide administrator may**, so a single-administrator church is never stuck, and
+  the audit summary says which case applied.
+- **Reading your own file is never refused.** The page explains why the buttons are absent.
+- **Nobody can re-point or remove their own link**, which would otherwise be a way straight out of
+  the rule above.
+- **A permanently disqualified volunteer cannot be made an administrator.**
+
+## 15. The four gaps closed on 2026-08-02
+
+- **The in-church encryption key download requires `manage_users` and writes an audit entry.** It
+  previously required neither, making `docs/SECURITY.md`'s claim that every key export is audited
+  untrue for that route.
+- **A church-created limited access level queues its work for review.** The gate reads `is_scoped`
+  rather than matching the built-in slug, so it cannot apply to only one level again.
+- **An unresolvable access level counts as needing review**, rather than silently as unscoped.
+- **The last other reviewer cannot be deactivated** by somebody holding unaffirmed entries of
+  their own.
 
 ---
 

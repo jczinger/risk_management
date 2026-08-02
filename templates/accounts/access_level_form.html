@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{% if level %}{{ level.name }}{% else %}New access level{% endif %}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{% if level %}{{ level.name }}{% else %}New access level{% endif %}</h1>
+    <p class="lede">
+      {% if level and level.is_builtin %}
+        This is one of the two levels VMS provides. You can change what it allows, and
+        rename it to suit your church — it cannot be removed.
+      {% else %}
+        Tick what somebody on this level may do. Anything left unticked is not available
+        to them, and the page it belongs to disappears from their navigation.
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <form method="post">
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">Save</button>
+      <a class="btn" href="{% url 'accounts:access_level_list' %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% if level and level.grants.exists %}
+  <p class="small muted">
+    {{ level.grants.count }} administrator(s) hold this level. A change takes effect on
+    their next request.
+  </p>
+{% endif %}
+{% endblock %}

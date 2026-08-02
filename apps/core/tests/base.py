@@ -88,15 +88,66 @@ class TenantTestCase(FastTenantTestCase):
         """
         An administrator. Passwordless, like every real one — there are no passwords.
 
-        No passkey either, which matters for anything going through the request stack:
+        A **Primary Admin**, unless ``access_level`` says otherwise. That default is
+        load-bearing: it is what a screening admin was before access levels existed, so
+        every test written before them keeps meaning what it meant. Without a grant an
+        account can do nothing at all, because ``has_capability`` fails closed.
+
+        No passkey, which matters for anything going through the request stack:
         ``ForcePasskeyMiddleware`` redirects an account without one to enrolment. Use
         :meth:`make_passkey` when the test needs to get past that.
         """
         from apps.accounts.models import User
+        from apps.core.seed import grant_primary_admin
 
+        access_level = extra.pop("access_level", None)
         defaults = {"first_name": "Test", "last_name": "Admin"}
         defaults.update(extra)
-        return User.objects.create_user(email=email, **defaults)
+        user = User.objects.create_user(email=email, **defaults)
+
+        if access_level is None:
+            grant_primary_admin(user.pk, granted_by_display="test fixture")
+        else:
+            self.grant_access(user, access_level)
+        return user
+
+    def grant_access(self, user, access_level, departments=()):
+        """Put ``user`` on ``access_level``, replacing any grant they already hold."""
+        from apps.core.models import UserAccessGrant
+
+        grant, _ = UserAccessGrant.objects.update_or_create(
+            user_id=user.pk,
+            defaults={"access_level": access_level, "granted_by_display": "test fixture"},
+        )
+        grant.departments.set(departments)
+        # grant_for caches on the instance, so a test that changes a grant mid-way would
+        # otherwise keep reading the old one.
+        self.forget_access(user)
+        return grant
+
+    def forget_access(self, user):
+        """Drop the cached grant on a user instance."""
+        from apps.core.access import _GRANT_CACHE_ATTR
+
+        if hasattr(user, _GRANT_CACHE_ATTR):
+            delattr(user, _GRANT_CACHE_ATTR)
+
+    def department_admin_level(self):
+        from apps.core.models import AccessLevel
+
+        return AccessLevel.objects.get(slug=AccessLevel.DEPARTMENT_ADMIN)
+
+    def make_department_admin(self, email="dept@test.ca", departments=(), **extra):
+        """
+        An administrator limited to ``departments``.
+
+        Given a passkey by default, unlike :meth:`make_admin`, because almost every test
+        that wants one is going through the request stack to check what they can reach.
+        """
+        user = self.make_admin(email=email, access_level=self.department_admin_level(), **extra)
+        self.grant_access(user, self.department_admin_level(), departments)
+        self.make_passkey(user)
+        return user
 
     def make_passkey(self, user, label="Test device"):
         """
@@ -147,6 +198,24 @@ class TenantTestCase(FastTenantTestCase):
         from apps.org.models import RoleAssignment
 
         return RoleAssignment.objects.create(volunteer=volunteer, role=role, **extra)
+
+    def make_own_file(self, user, role=None, **extra):
+        """
+        The volunteer record belonging to an administrator.
+
+        Named for what it is used to test: "their own file", the thing nobody may record
+        screening against while somebody else could. Takes the name from the account, so
+        a test does not accidentally check the rule against a different person.
+        """
+        volunteer = self.make_volunteer(
+            first_name=extra.pop("first_name", user.first_name or "Admin"),
+            last_name=extra.pop("last_name", user.last_name or "Person"),
+            user_id=user.pk,
+            **extra,
+        )
+        if role is not None:
+            self.assign(volunteer, role)
+        return volunteer
 
     def seed(self):
         from apps.requirements.seed import seed_default_template

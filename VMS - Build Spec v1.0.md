@@ -32,7 +32,12 @@ Deployment constraints: `DEBUG=False` in production; `ALLOWED_HOSTS` and `CSRF_T
 - **Public schema:** `Tenant` (church: name, subdomain/domain entry, document storage mode, created), platform super-admin user, tenant provisioning.
 - **Tenant schema:** everything else below.
 - **Super-admin console** (public schema): create/provision a church, create its first admin user, view tenant list. The super-admin does not browse tenant data day-to-day.
-- **Tenant users:** screening admins only. Multiple per church. All have equal permissions within their church.
+- **Tenant users:** screening admins only. Multiple per church. ~~All have equal permissions within their church.~~ **Amended 2026-07-29 at the owner's direction:** each administrator holds an **access level**, which decides both what they can do and — for a limited level — which departments' volunteers they can see. What this line described is now the *Primary Admin* level. See BUILD_NOTES §1.21. **Further amended 2026-08-02:** an administrator also has a
+**volunteer record of their own**, created with their account, and nobody records screening
+against their own record while another administrator could. This is *not* a volunteer login —
+§0 still holds, and the record has no credentials attached; it is the administrator's own
+Ministry Personnel file, reachable only through their administrator account. See BUILD_NOTES
+§1.22.
 - **Login flow:** passkey-first UI; fallback link to email+password, which then requires TOTP. TOTP enrollment (QR) and passkey enrollment in account settings. Session security: standard Django, secure cookies.
 
 ## 3. Org & volunteer model

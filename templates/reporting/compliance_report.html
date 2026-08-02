@@ -2,6 +2,8 @@
 {% block title %}Compliance report{% endblock %}
 
 {% block content %}
+
+{% include "reporting/_unverified_warning.html" %}
 <div class="page-head">
   <div>
     <h1>Compliance report</h1>
@@ -35,12 +37,7 @@
   </form>
 </div>
 
-<div class="grid grid--4 mb1">
-  <div class="tile"><div class="n">{{ total }}</div><div class="k">Volunteers</div></div>
-  <div class="tile tile--ok"><div class="n">{{ compliant_count }}</div><div class="k">Nothing owed</div></div>
-  <div class="tile {% if non_compliant_count %}tile--danger{% endif %}"><div class="n">{{ non_compliant_count }}</div><div class="k">Action needed</div></div>
-  <div class="tile"><div class="n">{% if compliance_rate is not None %}{{ compliance_rate }}%{% else %}—{% endif %}</div><div class="k">Compliant</div></div>
-</div>
+{% include "reporting/_report_summary.html" %}
 
 {% include "reporting/_compliance_table.html" %}
 

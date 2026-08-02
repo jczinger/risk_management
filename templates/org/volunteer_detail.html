@@ -22,13 +22,18 @@ This is the one screen that decrypts a volunteer's personal fields, so it is als
   </div>
   <div class="actions">
     <a class="btn" href="{% url 'reporting:volunteer_file' volunteer.pk %}">Printable file</a>
-    <a class="btn" href="{% url 'org:volunteer_edit' volunteer.pk %}">Edit details</a>
-    {% if volunteer.is_active %}
-      <a class="btn" href="{% url 'org:volunteer_deactivate' volunteer.pk %}">No longer serving</a>
-    {% elif not volunteer.is_permanently_disqualified %}
-      <form method="post" action="{% url 'org:volunteer_reactivate' volunteer.pk %}">
-        {% csrf_token %}<button type="submit" class="btn">Return to service</button>
-      </form>
+    {% if can.manage_users and not volunteer.user_id and not volunteer.is_permanently_disqualified %}
+      <a class="btn" href="{% url 'accounts:admin_invite' %}?volunteer={{ volunteer.pk }}">Make an administrator</a>
+    {% endif %}
+    {% if can.edit_volunteers and may_record %}
+      <a class="btn" href="{% url 'org:volunteer_edit' volunteer.pk %}">Edit details</a>
+      {% if volunteer.is_active %}
+        <a class="btn" href="{% url 'org:volunteer_deactivate' volunteer.pk %}">No longer serving</a>
+      {% elif not volunteer.is_permanently_disqualified %}
+        <form method="post" action="{% url 'org:volunteer_reactivate' volunteer.pk %}">
+          {% csrf_token %}<button type="submit" class="btn">Return to service</button>
+        </form>
+      {% endif %}
     {% endif %}
   </div>
 </div>
@@ -50,6 +55,18 @@ This is the one screen that decrypts a volunteer's personal fields, so it is als
       Recorded {{ volunteer.screening_block_recorded_at|date:"j F Y" }}. This volunteer
       may not serve until the outcome is resolved — either a fingerprint-verified check
       with the convictions disclosed and verified, or withdrawal.
+    </p>
+  </div>
+{% endif %}
+
+{% if not may_record %}
+  <div class="callout callout--info">
+    <h3>This is your own screening file</h3>
+    <p class="mb0">
+      {{ may_record_refusal }} You can see everything here, and you should — but Plan to
+      Protect assumes the person being screened and the person recording it are two
+      different people, so the buttons that would change this record are not offered to
+      you.
     </p>
   </div>
 {% endif %}
@@ -151,12 +168,14 @@ This is the one screen that decrypts a volunteer's personal fields, so it is als
           </div>
         </div>
         <div class="req-status">
-          {% if assignment.is_active %}
+          {% if assignment.is_active and can.manage_assignments and may_record %}
             <form method="post" action="{% url 'org:assignment_end' assignment.pk %}">
               {% csrf_token %}
               <input type="hidden" name="ended_on" value="{% now 'Y-m-d' %}">
               <button type="submit" class="btn btn--sm">End</button>
             </form>
+          {% elif assignment.is_active %}
+            <span class="badge">Serving</span>
           {% else %}
             <span class="badge badge--muted">Ended</span>
           {% endif %}
@@ -166,18 +185,12 @@ This is the one screen that decrypts a volunteer's personal fields, so it is als
       <p class="muted">No roles yet. Assigning one is what makes requirements apply.</p>
     {% endfor %}
 
-    {% if volunteer.is_active %}
+    {% if volunteer.is_active and can.manage_assignments and may_record %}
       <form method="post" action="{% url 'org:assignment_create' volunteer.pk %}" class="mt1">
         {% csrf_token %}
         {% include "partials/form.html" with form=assignment_form %}
         <button type="submit" class="btn btn--primary">Assign to a role</button>
       </form>
-      {% if volunteer.is_permanently_disqualified %}
-        <p class="small muted">
-          Only roles that are not positions of trust are offered, because of the permanent
-          disqualification above.
-        </p>
-      {% endif %}
     {% endif %}
   </div>
 </div>
@@ -188,7 +201,7 @@ This is the one screen that decrypts a volunteer's personal fields, so it is als
 <div class="card card--flush">
   <div class="card-head">
     <h2>Criminal record checks</h2>
-    {% if volunteer.is_active and not volunteer.is_permanently_disqualified %}
+    {% if volunteer.is_active and not volunteer.is_permanently_disqualified and can.record_crc and may_record %}
       <a class="btn btn--sm btn--primary" href="{% url 'requirements:crc_create' volunteer.pk %}">Record a check</a>
     {% endif %}
   </div>
@@ -232,7 +245,7 @@ This is the one screen that decrypts a volunteer's personal fields, so it is als
 <div class="card card--flush">
   <div class="card-head">
     <h2>Documents</h2>
-    <a class="btn btn--sm" href="{% url 'documents:create' volunteer.pk %}">Add a document</a>
+    {% if can.record_screening and may_record %}<a class="btn btn--sm" href="{% url 'documents:create' volunteer.pk %}">Add a document</a>{% endif %}
   </div>
   <div class="table-wrap">
     <table class="data">
@@ -258,12 +271,16 @@ This is the one screen that decrypts a volunteer's personal fields, so it is als
 </div>
 
 <div class="btn-row">
-  <form method="post" action="{% url 'org:volunteer_resync' volunteer.pk %}">
-    {% csrf_token %}
-    <button type="submit" class="btn btn--sm">Recalculate requirements</button>
-  </form>
-  <a class="btn btn--sm" href="{% url 'reporting:audit_trail' %}?entity_type=Volunteer&entity_id={{ volunteer.pk }}">
-    Audit trail for this volunteer
-  </a>
+  {% if can.edit_volunteers and may_record %}
+    <form method="post" action="{% url 'org:volunteer_resync' volunteer.pk %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn--sm">Recalculate requirements</button>
+    </form>
+  {% endif %}
+  {% if can.view_audit %}
+    <a class="btn btn--sm" href="{% url 'reporting:audit_trail' %}?entity_type=Volunteer&entity_id={{ volunteer.pk }}">
+      Audit trail for this volunteer
+    </a>
+  {% endif %}
 </div>
 {% endblock %}

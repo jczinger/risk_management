@@ -6,11 +6,13 @@
   <div>
     <h1>Roles</h1>
     <p class="lede">
-      Positions volunteers are assigned to. The flags on a role decide which requirements
-      apply to everyone serving in it.
+      Positions volunteers are assigned to. Every role is screened as a position of
+      trust; the leadership flag decides which extra requirements apply.
     </p>
   </div>
-  <div class="actions"><a class="btn btn--primary" href="{% url 'org:role_create' %}">Add a role</a></div>
+  {% if can.manage_org %}
+    <div class="actions"><a class="btn btn--primary" href="{% url 'org:role_create' %}">Add a role</a></div>
+  {% endif %}
 </div>
 
 <div class="card card--flush">
@@ -18,22 +20,7 @@
     <table class="data">
       <thead><tr><th>Department</th><th>Role</th><th>Flags</th><th class="num">Serving</th><th>Status</th></tr></thead>
       <tbody>
-        {% for role in roles %}
-          <tr>
-            <td class="small"><a href="{% url 'org:department_detail' role.department.pk %}">{{ role.department.name }}</a></td>
-            <td><a href="{% url 'org:role_detail' role.pk %}"><strong>{{ role.name }}</strong></a></td>
-            <td class="pill-row">
-              {% if role.is_leadership %}<span class="badge badge--info">Leadership</span>{% endif %}
-            </td>
-            <td class="num">{{ role.holders }}</td>
-            <td>{% if role.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</td>
-          </tr>
-        {% empty %}
-          <tr><td colspan="5" class="empty">
-            <strong>No roles yet</strong>
-            Add a department first, then create roles inside it.
-          </td></tr>
-        {% endfor %}
+        {% include "org/_role_rows.html" with show_department=True empty_title="No roles yet" empty_hint="Add a department first, then create roles inside it." %}
       </tbody>
     </table>
   </div>

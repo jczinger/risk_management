@@ -20,6 +20,7 @@ urlpatterns = [
     path("requirements/", include("apps.requirements.urls")),
     path("documents/", include("apps.documents.urls")),
     path("reports/", include("apps.reporting.urls")),
+    path("review/", include("apps.review.urls")),
 ]
 
 handler403 = "apps.core.errors.permission_denied"

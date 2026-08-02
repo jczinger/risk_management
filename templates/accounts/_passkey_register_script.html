@@ -1,0 +1,18 @@
+{% load static %}
+{% comment %}
+The script half of the registration block. `fallback_redirect` is where the page
+lands when the ceremony finishes without a usable JSON response.
+{% endcomment %}
+<script src="{% static 'js/passkeys.js' %}"></script>
+<script>
+  document.getElementById("passkey-register").addEventListener("click", function () {
+    window.VMSPasskeys.register({
+      beginUrl: "{% url 'accounts:webauthn_register_begin' %}",
+      finishUrl: "{% url 'accounts:webauthn_register_finish' %}",
+      buttonSelector: "#passkey-register",
+      statusSelector: "#passkey-status",
+      labelSelector: "#passkey-label",
+      fallbackRedirect: "{{ fallback_redirect }}",
+    });
+  });
+</script>

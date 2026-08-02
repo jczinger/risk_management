@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Access for {{ subject.get_full_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Access for {{ subject.get_full_name|default:subject.email }}</h1>
+    <p class="lede">
+      The access level decides what they can do. A limited level also decides which
+      volunteers they can see — those who have served in the departments given below,
+      now or in the past.
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <form method="post">
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">Save access</button>
+      <a class="btn" href="{% url 'accounts:admin_list' %}">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<p class="small muted">
+  You can only grant an access level no wider than your own, and only departments you
+  administer yourself. Every change is recorded in the audit trail.
+</p>
+{% endblock %}

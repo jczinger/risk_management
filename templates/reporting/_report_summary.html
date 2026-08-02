@@ -1,0 +1,11 @@
+{% comment %}
+The compliance report's four summary tiles, shared by the screen and print/PDF
+views so the two cannot drift. `print_view` mutes the tile tones — a report on
+paper carries no colour.
+{% endcomment %}
+<div class="grid grid--4 mb1">
+  <div class="tile"><div class="n">{{ total }}</div><div class="k">Volunteers</div></div>
+  <div class="tile{% if not print_view %} tile--ok{% endif %}"><div class="n">{{ compliant_count }}</div><div class="k">Nothing owed</div></div>
+  <div class="tile{% if not print_view and non_compliant_count %} tile--danger{% endif %}"><div class="n">{{ non_compliant_count }}</div><div class="k">Action needed</div></div>
+  <div class="tile"><div class="n">{% if compliance_rate is not None %}{{ compliance_rate }}%{% else %}—{% endif %}</div><div class="k">Compliant</div></div>
+</div>

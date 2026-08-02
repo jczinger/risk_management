@@ -13,18 +13,20 @@ by design.
 from __future__ import annotations
 
 import datetime
+from collections import defaultdict
 from dataclasses import dataclass, field
 
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, F, Prefetch, Q
 from django.utils import timezone
 
-from apps.org.models import Department, Role, RoleAssignment, Volunteer
-from apps.requirements.models import (
-    DUE_SOON_DAYS,
-    RequirementDefinition,
-    RequirementInstance,
-    RequirementStatus,
+from apps.core.access import (
+    scope_departments,
+    scope_instances,
+    scope_roles,
+    scope_volunteers,
 )
+from apps.org.models import Department, Role, RoleAssignment, Volunteer
+from apps.requirements.models import DUE_SOON_DAYS, RequirementInstance
 
 
 @dataclass
@@ -45,25 +47,28 @@ class Buckets:
             "satisfied": len(self.satisfied),
         }
 
-    @property
-    def action_needed(self) -> int:
-        return len(self.overdue) + len(self.due_soon) + len(self.outstanding)
-
-
 def instance_queryset(
     *,
     department: Department | None = None,
     role: Role | None = None,
     requirement_type: str = "",
-    include_inactive_volunteers: bool = False,
+    user=None,
 ):
-    """The filtered instance queryset every report and the dashboard share."""
+    """
+    The dashboard's filtered instance queryset (see :func:`build_buckets`).
+
+    ``user`` is the **access scope** and is applied first; ``department`` and ``role`` are
+    the reader's chosen *filters* and narrow it further. Keeping them separate matters,
+    because they ask different questions and use different rules: a filter on a
+    department means "who serves there now", while the scope means "whose file belongs to
+    my departments, now or in the past". Passing ``user=None`` scopes nothing, which is
+    what the nightly job and the seeders want.
+    """
     queryset = RequirementInstance.objects.select_related(
         "volunteer", "definition"
-    ).filter(definition__is_active=True)
+    ).filter(definition__is_active=True, volunteer__is_active=True)
 
-    if not include_inactive_volunteers:
-        queryset = queryset.filter(volunteer__is_active=True)
+    queryset = scope_instances(queryset, user)
 
     if role is not None:
         queryset = queryset.filter(
@@ -87,6 +92,7 @@ def build_buckets(
     role: Role | None = None,
     requirement_type: str = "",
     as_of: datetime.date | None = None,
+    user=None,
 ) -> Buckets:
     """
     Sort every relevant requirement into the dashboard's buckets.
@@ -100,7 +106,7 @@ def build_buckets(
     buckets = Buckets()
 
     for instance in instance_queryset(
-        department=department, role=role, requirement_type=requirement_type
+        department=department, role=role, requirement_type=requirement_type, user=user
     ):
         getattr(buckets, instance.bucket).append(instance)
 
@@ -161,16 +167,23 @@ def build_compliance_report(
     requirement_type: str = "",
     include_inactive: bool = False,
     as_of: datetime.date | None = None,
+    user=None,
 ) -> dict:
     """
     The compliance report: every volunteer × every requirement that applies to them.
 
     Shaped for handing to an insurer or a board — a per-volunteer verdict with the
     detail behind it, scoped church-wide or to one department (Build Spec §8).
+
+    Note the two department filters below, which look redundant and are not.
+    ``scope_volunteers`` applies the caller's *access* — volunteers who have ever served
+    in their departments — and ``in_department`` applies the reader's chosen *filter*,
+    which asks who serves there now. Both have to be present: dropping the first leaks,
+    and dropping the second changes what the report means.
     """
     as_of = as_of or timezone.localdate()
 
-    volunteers = Volunteer.objects.all()
+    volunteers = scope_volunteers(Volunteer.objects.all(), user)
     if not include_inactive:
         volunteers = volunteers.active()
     if department is not None:
@@ -210,10 +223,25 @@ def build_compliance_report(
     compliant = [r for r in rows if r.is_compliant]
     non_compliant = [r for r in rows if not r.is_compliant]
 
+    # A count, not a flag: the report needs to say how many of its figures rest on
+    # unaffirmed evidence. ``is_compliant`` and ``status_label`` are deliberately left
+    # alone — a pending entry counts as compliant, which was the owner's decision, and
+    # this note is what keeps that honest for whoever reads the report.
+    from apps.review.models import ReviewItem
+
+    unverified = ReviewItem.objects.pending().filter(
+        volunteer__in=[row.volunteer.pk for row in rows]
+    )
+    unverified_count = unverified.count()
+    oldest = unverified.order_by("created_at").values_list("created_at", flat=True).first()
+
     return {
         "as_of": as_of,
         "department": department,
         "requirement_type": requirement_type,
+        "unverified_count": unverified_count,
+        "unverified_volunteers": unverified.values("volunteer_id").distinct().count(),
+        "unverified_oldest_days": (timezone.now() - oldest).days if oldest else None,
         "rows": rows,
         "compliant": compliant,
         "non_compliant": non_compliant,
@@ -221,46 +249,108 @@ def build_compliance_report(
         "compliant_count": len(compliant),
         "non_compliant_count": len(non_compliant),
         "compliance_rate": round(100 * len(compliant) / len(rows)) if rows else None,
-        "definitions": RequirementDefinition.objects.active(),
         "due_soon_days": DUE_SOON_DAYS,
     }
 
 
-def build_department_summary(as_of: datetime.date | None = None) -> list[dict]:
-    """Per-department roll-up for the dashboard and the report's header."""
+def bucket_counts(instances) -> dict:
+    """How many of these instances fall in each dashboard bucket."""
+    counts = {"overdue": 0, "due_soon": 0, "outstanding": 0, "satisfied": 0}
+    for instance in instances:
+        counts[instance.bucket] += 1
+    return counts
+
+
+def volunteer_file_core(volunteer: Volunteer) -> dict:
+    """
+    The queries the volunteer's detail page and printed file share: the ordered
+    requirement list with its "unverified" annotations, the onboarding/recurring
+    split, and the bucket counts.
+
+    The annotation is one indexed query for the whole page, then plain attributes.
+    There is no relation to prefetch — a review item points at its subject with a
+    pair of strings — so the alternative would be a query per rendered row. Every
+    render path that shows a requirement row has to come through here, or a page
+    quietly loses its "unverified" badge.
+    """
+    from apps.review.recording import open_review_index
+
+    instances = list(
+        volunteer.requirement_instances.select_related("definition").order_by(
+            "definition__sequence", "definition__name"
+        )
+    )
+    index = open_review_index(volunteer=volunteer)
+    index.annotate(instances, entity_type="RequirementInstance")
+
+    return {
+        "instances": instances,
+        "review_index": index,
+        "onboarding": [i for i in instances if i.definition.is_onboarding],
+        "recurring": [i for i in instances if not i.definition.is_onboarding],
+        "buckets": bucket_counts(instances),
+    }
+
+
+def build_department_summary(as_of: datetime.date | None = None, user=None) -> list[dict]:
+    """
+    Per-department roll-up for the dashboard and the report's header.
+
+    Scoped, and this is the sort of leak that survives a per-row test: none of the
+    numbers here is a name, so "can a department admin open volunteer X?" passes while
+    the dashboard quietly lists every department at the church with its volunteer count
+    and how many of them are behind.
+    """
     as_of = as_of or timezone.localdate()
+
+    departments = list(
+        scope_departments(Department.objects.filter(is_active=True), user).annotate(
+            volunteer_count=Count(
+                "roles__assignments__volunteer",
+                filter=Q(
+                    roles__assignments__is_active=True,
+                    roles__assignments__volunteer__is_active=True,
+                ),
+                distinct=True,
+            )
+        )
+    )
+
+    # One instances query for every department, grouped in Python — this used to be two
+    # queries per department. The join through active assignments fans out one row per
+    # (instance, department served), which is the grouping the summary wants: an
+    # instance legitimately counts in every department its volunteer serves. The same
+    # volunteer holding two roles in ONE department would fan out twice, so rows are
+    # deduplicated per (department, instance).
+    instances = (
+        RequirementInstance.objects.select_related("definition", "volunteer")
+        .filter(
+            definition__is_active=True,
+            volunteer__is_active=True,
+            volunteer__assignments__is_active=True,
+            volunteer__assignments__role__department__in=departments,
+        )
+        .annotate(served_department_id=F("volunteer__assignments__role__department"))
+    )
+
+    grouped: dict[int, list] = defaultdict(list)
+    seen: set[tuple[int, int]] = set()
+    for instance in instances:
+        key = (instance.served_department_id, instance.pk)
+        if key in seen:
+            continue
+        seen.add(key)
+        grouped[instance.served_department_id].append(instance)
+
     summary = []
-
-    for department in Department.objects.filter(is_active=True):
-        instances = list(
-            RequirementInstance.objects.select_related("definition", "volunteer")
-            .filter(
-                definition__is_active=True,
-                volunteer__is_active=True,
-                volunteer__assignments__role__department=department,
-                volunteer__assignments__is_active=True,
-            )
-            .distinct()
-        )
-        counts = {"overdue": 0, "due_soon": 0, "outstanding": 0, "satisfied": 0}
-        for instance in instances:
-            counts[instance.bucket] += 1
-
-        volunteer_count = (
-            Volunteer.objects.filter(
-                assignments__role__department=department,
-                assignments__is_active=True,
-                is_active=True,
-            )
-            .distinct()
-            .count()
-        )
-
+    for department in departments:
+        instances_here = grouped.get(department.pk, [])
+        counts = bucket_counts(instances_here)
         summary.append(
             {
                 "department": department,
-                "volunteers": volunteer_count,
-                "requirements": len(instances),
+                "volunteers": department.volunteer_count,
+                "requirements": len(instances_here),
                 **counts,
                 "needs_action": counts["overdue"] + counts["outstanding"],
             }
@@ -277,44 +367,53 @@ def build_volunteer_file(volunteer: Volunteer, as_of: datetime.date | None = Non
     own file, printed for their record or for an audit.
     """
     as_of = as_of or timezone.localdate()
+    core = volunteer_file_core(volunteer)
 
-    instances = list(
-        volunteer.requirement_instances.select_related("definition").order_by(
-            "definition__sequence", "definition__name"
+    crc_records = list(
+        volunteer.crc_records.prefetch_related("convictions", "overrides").order_by(
+            "-report_date"
         )
     )
+    documents = list(volunteer.documents.order_by("-document_date", "-created_at"))
 
     return {
         "volunteer": volunteer,
         "as_of": as_of,
-        "onboarding": [i for i in instances if i.definition.is_onboarding],
-        "recurring": [i for i in instances if not i.definition.is_onboarding],
+        "onboarding": core["onboarding"],
+        "recurring": core["recurring"],
         "assignments": volunteer.assignments.select_related("role", "role__department").order_by(
             "-is_active", "-started_on"
         ),
-        "crc_records": volunteer.crc_records.prefetch_related(
-            "convictions", "overrides"
-        ).order_by("-report_date"),
-        "documents": volunteer.documents.order_by("-document_date", "-created_at"),
-        "buckets": {
-            key: sum(1 for i in instances if i.bucket == key)
-            for key in ("overdue", "due_soon", "outstanding", "satisfied")
-        },
+        "crc_records": crc_records,
+        "documents": documents,
+        "buckets": core["buckets"],
     }
 
 
-def dashboard_headline(as_of: datetime.date | None = None) -> dict:
-    """Counts for the dashboard's summary tiles."""
+def dashboard_headline(as_of: datetime.date | None = None, user=None) -> dict:
+    """
+    Counts for the dashboard's summary tiles.
+
+    Every one of these is scoped, including the three that are easiest to overlook
+    because they name nobody: ``blocked`` and ``minors`` are counts of sensitive
+    categories, and ``departments``/``roles`` describe the shape of the whole church. A
+    scoped admin's tiles should describe their own departments, not the church's.
+    """
     as_of = as_of or timezone.localdate()
 
-    volunteers = Volunteer.objects.active()
+    volunteers = scope_volunteers(Volunteer.objects.all(), user).active()
+    active_volunteers = volunteers.count()
+    serving = volunteers.filter(assignments__is_active=True).distinct().count()
     return {
-        "active_volunteers": volunteers.count(),
-        "serving": volunteers.filter(assignments__is_active=True).distinct().count(),
-        "unassigned": volunteers.exclude(assignments__is_active=True).count(),
-        "blocked": Volunteer.objects.blocked().count(),
-        "departments": Department.objects.filter(is_active=True).count(),
-        "roles": Role.objects.filter(is_active=True).count(),
+        "active_volunteers": active_volunteers,
+        "serving": serving,
+        # Everyone active either serves or does not — derived, not a third query.
+        "unassigned": active_volunteers - serving,
+        "blocked": scope_volunteers(Volunteer.objects.all(), user).blocked().count(),
+        "departments": scope_departments(
+            Department.objects.filter(is_active=True), user
+        ).count(),
+        "roles": scope_roles(Role.objects.filter(is_active=True), user).count(),
         "minors": volunteers.filter(
             Q(birth_year__gt=as_of.year - 18)
             | Q(birth_year=as_of.year - 18, birth_month__gt=as_of.month)

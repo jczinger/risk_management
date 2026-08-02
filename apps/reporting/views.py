@@ -13,16 +13,23 @@ import datetime
 import logging
 
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.http import HttpResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.http import Http404, HttpResponse
+from django.shortcuts import get_object_or_404, render
 from django.template.loader import render_to_string
 from django.utils import timezone
 
+from apps.core.access import (
+    Capability,
+    requires,
+    scope_audit_events,
+    scope_departments,
+    scope_volunteers,
+)
 from apps.core.models import AuditAction, AuditEvent
-from apps.org.models import Department, Role, Volunteer
+from apps.org.models import Department, Volunteer
 from apps.requirements.forms import RequirementFilterForm
+from apps.review.services import pending_summary as review_summary
 
 from .services import (
     build_buckets,
@@ -42,7 +49,7 @@ AUDIT_PAGE_SIZE = 50
 # ---------------------------------------------------------------------------
 
 
-@login_required
+@requires(Capability.VIEW_VOLUNTEERS)
 def dashboard(request):
     """
     The screening admin's home page.
@@ -50,7 +57,7 @@ def dashboard(request):
     Three buckets — overdue, coming due within 60 days, compliant — filterable by
     department, role and requirement type (Build Spec §7).
     """
-    form = RequirementFilterForm(request.GET or None)
+    form = RequirementFilterForm(request.GET or None, user=request.user)
     department = role = None
     requirement_type = ""
 
@@ -60,23 +67,35 @@ def dashboard(request):
         requirement_type = form.cleaned_data.get("requirement_type") or ""
 
     buckets = build_buckets(
-        department=department, role=role, requirement_type=requirement_type
+        department=department,
+        role=role,
+        requirement_type=requirement_type,
+        user=request.user,
     )
 
     context = {
         "form": form,
         "buckets": buckets,
         "counts": buckets.counts,
-        "headline": dashboard_headline(),
-        "departments": build_department_summary(),
-        "today": timezone.localdate(),
         "selected_department": department,
         "selected_role": role,
     }
 
-    # HTMX swaps just the bucket panel, so filtering does not reload the page.
-    template = "reporting/_dashboard_buckets.html" if request.htmx else "reporting/dashboard.html"
-    return render(request, template, context)
+    # HTMX swaps just the bucket panel, so filtering does not reload the page — and the
+    # partial renders nothing but the buckets, so the headline tiles, review summary and
+    # per-department roll-up (a dozen-plus queries) are computed only for the full page.
+    if request.htmx:
+        return render(request, "reporting/_dashboard_buckets.html", context)
+
+    context.update(
+        {
+            "headline": dashboard_headline(user=request.user),
+            "review": review_summary(),
+            "departments": build_department_summary(user=request.user),
+            "today": timezone.localdate(),
+        }
+    )
+    return render(request, "reporting/dashboard.html", context)
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +103,7 @@ def dashboard(request):
 # ---------------------------------------------------------------------------
 
 
-@login_required
+@requires(Capability.VIEW_VOLUNTEERS)
 def compliance_report(request):
     """Per-department or church-wide compliance report."""
     department = _department_from_request(request)
@@ -95,10 +114,13 @@ def compliance_report(request):
         department=department,
         requirement_type=requirement_type,
         include_inactive=include_inactive,
+        user=request.user,
     )
     report.update(
         {
-            "departments": Department.objects.filter(is_active=True),
+            "departments": scope_departments(
+                Department.objects.filter(is_active=True), request.user
+            ),
             "include_inactive": include_inactive,
             "print_view": request.GET.get("print") == "1",
         }
@@ -121,10 +143,33 @@ def compliance_report(request):
 
 
 def _department_from_request(request) -> Department | None:
+    """
+    The department named in ``?department=``, checked against what the caller may see.
+
+    Two things here are easy to get wrong, and both were wrong before access levels
+    existed:
+
+    * The id came straight from the query string with no check at all. This function
+      feeds ``build_compliance_report``, which renders every volunteer in that department
+      against their screening status — and ``&format=pdf`` hands it over as a file. So
+      ``?department=<any id>`` was a complete compliance report for a department the
+      caller does not administer.
+    * An out-of-scope id must **404**, not fall through to ``None``. ``None`` means
+      *church-wide*, which is broader than what was asked for — a bad id would have
+      quietly widened the report instead of refusing it. ``None`` is reserved for the
+      parameter genuinely being absent, and that branch is scoped on its own by
+      ``build_compliance_report``.
+    """
     department_id = request.GET.get("department")
     if not department_id:
         return None
-    return Department.objects.filter(pk=department_id).first()
+
+    department = scope_departments(Department.objects.all(), request.user).filter(
+        pk=department_id
+    ).first()
+    if department is None:
+        raise Http404("No such department.")
+    return department
 
 
 def _report_filename(prefix: str, department: Department | None) -> str:
@@ -144,10 +189,10 @@ def _slug(value: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@login_required
+@requires(Capability.VIEW_VOLUNTEERS)
 def volunteer_file(request, pk: int):
     """The complete Ministry Personnel file, printable."""
-    volunteer = get_object_or_404(Volunteer, pk=pk)
+    volunteer = get_object_or_404(scope_volunteers(Volunteer.objects.all(), request.user), pk=pk)
     context = build_volunteer_file(volunteer)
     context["print_view"] = request.GET.get("print") == "1"
 
@@ -170,7 +215,7 @@ def volunteer_file(request, pk: int):
 # ---------------------------------------------------------------------------
 
 
-@login_required
+@requires(Capability.VIEW_AUDIT)
 def audit_trail(request):
     """
     Read-only, filterable audit trail.
@@ -178,7 +223,10 @@ def audit_trail(request):
     Append-only at the model layer, and there is no edit or delete view here — the
     viewer can only read.
     """
-    events = AuditEvent.objects.all()
+    # All of it or none of it: a scoped level cannot hold view_audit (AccessLevel.clean
+    # refuses the combination), and this scope is the second layer in case a row is
+    # ever written past the first. See scope_audit_events for why partial would be worse.
+    events = scope_audit_events(AuditEvent.objects.all(), request.user)
 
     action = request.GET.get("action", "")
     entity_type = request.GET.get("entity_type", "")
@@ -228,7 +276,7 @@ def audit_trail(request):
     return render(request, template, context)
 
 
-@login_required
+@requires(Capability.VIEW_AUDIT)
 def audit_event_detail(request, pk: int):
     """
     One audit entry.
@@ -237,7 +285,7 @@ def audit_event_detail(request, pk: int):
     does not render it. Decrypting it here anyway would put personal information into a
     response for no reason, so the read simply does not happen.
     """
-    event = get_object_or_404(AuditEvent, pk=pk)
+    event = get_object_or_404(scope_audit_events(AuditEvent.objects.all(), request.user), pk=pk)
     return render(request, "reporting/audit_event_detail.html", {"event": event})
 
 
@@ -246,7 +294,7 @@ def audit_event_detail(request, pk: int):
 # ---------------------------------------------------------------------------
 
 
-@login_required
+@requires(Capability.VIEW_AUDIT)
 def email_log(request):
     """
     Delivery history for reminder digests.

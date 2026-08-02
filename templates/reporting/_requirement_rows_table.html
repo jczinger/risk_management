@@ -1,0 +1,23 @@
+{% comment %}
+The per-volunteer requirement table inside the compliance report's detail section.
+One table, shared by the print and screen branches so the two cannot drift.
+Expects `row` (a compliance report row with .instances).
+{% endcomment %}
+<table class="data">
+  <thead><tr><th>Requirement</th><th>Status</th><th>Completed</th><th>Next due</th></tr></thead>
+  <tbody>
+    {% for instance in row.instances %}
+      <tr>
+        <td>{{ instance.definition.name }}</td>
+        <td>
+          {{ instance.get_status_display }}
+          {% if instance.not_applicable_reason %}<div class="row-note">{{ instance.not_applicable_reason }}</div>{% endif %}
+        </td>
+        <td class="small nowrap">{{ instance.completed_on|date:"j M Y"|default:"—" }}</td>
+        <td class="small nowrap">{{ instance.effective_due_date|date:"j M Y"|default:"—" }}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="4" class="muted">No applicable requirements.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

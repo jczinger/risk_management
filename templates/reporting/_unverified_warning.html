@@ -1,0 +1,14 @@
+{% comment %}
+The unverified-figures note, shared by the screen and print/PDF compliance reports.
+Deliberately blunt: the report still counts a pending entry as compliant — that was
+the owner's decision — and this note is what keeps that honest for whoever reads it,
+which may be an insurer or a board.
+{% endcomment %}
+{% if unverified_count %}
+  <div class="messages"><ul><li class="warning">
+    {{ unverified_count }} of the figure{{ unverified_count|pluralize }} in this report
+    rest{{ unverified_count|pluralize:"s," }} on entries recorded by an administrator on a
+    limited access level and not yet affirmed
+    ({{ unverified_volunteers }} volunteer{{ unverified_volunteers|pluralize }}{% if unverified_oldest_days %}, oldest {{ unverified_oldest_days }} days{% endif %}).
+  </li></ul></div>
+{% endif %}

@@ -63,28 +63,36 @@ def find_due_reminders(tenant, as_of: datetime.date | None = None) -> list[dict]
     )
 
     # --- Approaching expiry -------------------------------------------------
-    for days in lead_days:
-        target = as_of + datetime.timedelta(days=days)
-        approaching = base.filter(
-            Q(status=RequirementStatus.COMPLETE, expires_on=target)
-            | Q(
-                status__in=[RequirementStatus.NOT_STARTED, RequirementStatus.IN_PROGRESS],
-                due_on=target,
-            )
+    #
+    # One query for every lead time rather than one per lead time: each target date
+    # maps back to the lead that produced it, and an instance can only ever land on
+    # one target (a row has a single expiry or due date).
+    targets = {as_of + datetime.timedelta(days=days): days for days in lead_days}
+    approaching = base.filter(
+        Q(status=RequirementStatus.COMPLETE, expires_on__in=targets)
+        | Q(
+            status__in=[RequirementStatus.NOT_STARTED, RequirementStatus.IN_PROGRESS],
+            due_on__in=targets,
         )
-        for instance in approaching:
-            found.append(
-                {
-                    "instance": instance,
-                    "kind": (
-                        ReminderKind.TURNING_18
-                        if instance.due_reason.startswith("Turned 18")
-                        else ReminderKind.LEAD_TIME
-                    ),
-                    "lead_days": days,
-                    "due_date": instance.effective_due_date,
-                }
-            )
+    )
+    for instance in approaching:
+        matched = (
+            instance.expires_on
+            if instance.status == RequirementStatus.COMPLETE
+            else instance.due_on
+        )
+        found.append(
+            {
+                "instance": instance,
+                "kind": (
+                    ReminderKind.TURNING_18
+                    if instance.due_reason.startswith("Turned 18")
+                    else ReminderKind.LEAD_TIME
+                ),
+                "lead_days": targets[matched],
+                "due_date": instance.effective_due_date,
+            }
+        )
 
     # --- Just went overdue --------------------------------------------------
     #
@@ -135,26 +143,61 @@ def raise_reminder(entry: dict) -> ReminderLog | None:
 
 def admin_recipients() -> list[str]:
     """
-    Every active admin's email address in the current schema.
+    Every active **church-wide** admin's email address in the current schema.
 
     Addresses are encrypted at rest, so this decrypts them — the one moment they are in
     the clear, at send time, exactly as PRD §5 specifies.
+
+    Restricted to unscoped administrators when access levels came in (2026-07-29), and
+    that was a leak rather than a preference. The digest is *one shared body* built from a
+    church-wide query, so left alone it would have mailed every department admin a list
+    naming every volunteer at the church with anything overdue — straight through the new
+    boundary, invisible in the UI, and recorded permanently in ``EmailLog``.
+
+    The owner chose this over per-admin scoped digests. The cost is that a department
+    admin gets no unprompted nudge and has to look at their dashboard; the benefit is that
+    the reminder de-duplication key stays untouched. That key is
+    ``(instance, kind, lead_days, expiry_at_send)``, so a volunteer serving in two
+    departments would have been claimed once and silently reported to only one of the two
+    admins who needed to know — a subtle wrong answer in place of a plain absence.
     """
     from apps.accounts.models import User
+    from apps.core.models import UserAccessGrant
 
-    return [u.email for u in User.objects.filter(is_active=True) if u.email]
+    unscoped = UserAccessGrant.objects.filter(
+        access_level__is_scoped=False, access_level__is_active=True
+    ).values_list("user_id", flat=True)
+
+    return [
+        u.email
+        for u in User.objects.filter(is_active=True, pk__in=list(unscoped))
+        if u.email
+    ]
 
 
-def send_digest(tenant, entries: list[dict], *, as_of: datetime.date | None = None) -> EmailLog | None:
+def send_digest(
+    tenant,
+    entries: list[dict],
+    *,
+    as_of: datetime.date | None = None,
+    review_backlog: dict | None = None,
+) -> EmailLog | None:
     """
     Send one church's daily reminder digest and log it.
 
     Returns the :class:`EmailLog` row, or None when there was nothing to send or the
     church has notifications turned off.
+
+    ``review_backlog`` carries the count of entries awaiting a primary admin's
+    affirmation. It changes the early return below: a church with nothing due but a
+    month-old backlog gets no reminders and *would* therefore get no email at all — which
+    is exactly the church that needs an unprompted nudge, because an unaffirmed entry
+    already counts as compliant and so shows up nowhere else.
     """
     as_of = as_of or timezone.localdate()
+    review_backlog = review_backlog or {}
 
-    if not entries:
+    if not entries and not review_backlog.get("stale"):
         return None
     if not tenant.notifications_enabled:
         logger.info("Notifications disabled for %s; skipping digest", tenant.schema_name)
@@ -178,8 +221,14 @@ def send_digest(tenant, entries: list[dict], *, as_of: datetime.date | None = No
         "upcoming": upcoming,
         "total": len(entries),
         "dashboard_url": tenant.url,
+        "review": review_backlog,
     }
-    subject = _subject(tenant, overdue_count=len(overdue), upcoming_count=len(upcoming))
+    subject = _subject(
+        tenant,
+        overdue_count=len(overdue),
+        upcoming_count=len(upcoming),
+        review_count=review_backlog.get("pending", 0),
+    )
     body_text = render_to_string("notifications/digest.txt", context)
     body_html = render_to_string("notifications/digest.html", context)
 
@@ -188,6 +237,8 @@ def send_digest(tenant, entries: list[dict], *, as_of: datetime.date | None = No
         subject=subject,
         body=body_text,
         recipient_count=len(recipients),
+        # Still the reminder count, so the email log keeps meaning what it always has. The
+        # review backlog is a line in the body, not another kind of item.
         item_count=len(entries),
         status=NotificationStatus.QUEUED,
     )
@@ -240,13 +291,17 @@ def send_digest(tenant, entries: list[dict], *, as_of: datetime.date | None = No
     return log
 
 
-def _subject(tenant, *, overdue_count: int, upcoming_count: int) -> str:
+def _subject(tenant, *, overdue_count: int, upcoming_count: int, review_count: int = 0) -> str:
     """A subject line that says what is inside, so it survives a crowded inbox."""
     parts = []
     if overdue_count:
         parts.append(f"{overdue_count} overdue")
     if upcoming_count:
         parts.append(f"{upcoming_count} coming due")
+    # Named rather than left to fall through to "update": when the backlog is the only
+    # reason this email exists, a subject saying "update" buries the one thing it is for.
+    if review_count and not parts:
+        parts.append(f"{review_count} awaiting your review")
     detail = ", ".join(parts) or "update"
     return f"[{tenant.name}] Volunteer screening: {detail}"
 
@@ -266,11 +321,15 @@ def process_tenant_reminders(tenant, as_of: datetime.date | None = None) -> dict
         if raise_reminder(entry) is not None:
             claimed.append(entry)
 
-    log = send_digest(tenant, claimed, as_of=as_of)
+    from apps.review.services import pending_summary
+
+    backlog = pending_summary()
+    log = send_digest(tenant, claimed, as_of=as_of, review_backlog=backlog)
 
     return {
         "candidates": len(candidates),
         "claimed": len(claimed),
+        "review_pending": backlog["pending"],
         "sent": bool(log and log.status == NotificationStatus.SENT),
         "email_log_id": log.pk if log else None,
     }

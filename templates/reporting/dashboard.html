@@ -53,6 +53,30 @@ instant rather than a page load.
   </div>
 </div>
 
+{% comment %}
+Hidden at zero *and* when the church has nobody on a limited access level — otherwise
+every single-administrator church would carry a permanent "0 awaiting review" ornament for
+a feature it does not use.
+{% endcomment %}
+{% if review.has_scoped_admins and review.pending %}
+  <div class="grid grid--2 mb1">
+    <div class="tile {% if review.stale %}tile--warn{% endif %}">
+      <div class="n">{{ review.pending }}</div>
+      <div class="k">
+        Awaiting review
+        {% if review.stale %}<br><span class="small">{{ review.stale }} over 30 days</span>{% endif %}
+      </div>
+    </div>
+    <div class="tile" style="align-content:center">
+      <a class="btn btn--primary" href="{% url 'review:queue' %}">Open the review queue</a>
+      <div class="small muted mt1">
+        These entries already count as compliant. Affirming confirms the evidence behind
+        them.
+      </div>
+    </div>
+  </div>
+{% endif %}
+
 <div class="card">
   <form class="filters filter-form"
         hx-get="{% url 'dashboard' %}"

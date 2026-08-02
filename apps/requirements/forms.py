@@ -16,16 +16,27 @@ from django.utils import timezone
 from apps.org.models import Department, Role
 
 from .models import (
-    AgeRule,
     AppliesTo,
-    Cadence,
     CRCNotClearOutcome,
     CRCResult,
-    DependencyMode,
     DisqualifyingConviction,
     DiscretionaryOverride,
     RequirementDefinition,
 )
+
+
+def substantive_reason(value: str, *, minimum: int, message: str) -> str:
+    """
+    Refuse a reason too short to mean anything.
+
+    Every form that writes a justification into the permanent record shares this floor,
+    with its own wording — the message is the form's chance to say *why* the record has
+    to be substantive.
+    """
+    value = (value or "").strip()
+    if len(value) < minimum:
+        raise forms.ValidationError(message)
+    return value
 
 
 class RequirementDefinitionForm(forms.ModelForm):
@@ -73,8 +84,13 @@ class RequirementDefinitionForm(forms.ModelForm):
             ),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
+        # Deliberately unscoped. A requirement definition is church-wide: "two references
+        # for every leadership role" is a statement about the whole church, and offering a
+        # limited admin a subset of roles would let them define a requirement that looks
+        # church-wide and is not. MANAGE_REQUIREMENTS is not granted to any limited level,
+        # and `user` is accepted only so every form in this codebase is called the same way.
         self.fields["roles"].queryset = Role.objects.filter(is_active=True).select_related(
             "department"
         )
@@ -93,22 +109,14 @@ class RequirementDefinitionForm(forms.ModelForm):
         self.fields["must_follow"].empty_label = "No dependency"
 
     def clean(self):
+        # Everything else — cadence months, gate-needs-a-dependency, the offset only
+        # meaning something with a dependency — is enforced by ``model.clean()`` and
+        # surfaces here through ModelForm validation. ``roles`` is the one check the
+        # model cannot make: M2M values do not exist at model-clean time.
         cleaned = super().clean()
-
-        if cleaned.get("cadence") == Cadence.CUSTOM_MONTHS and not cleaned.get("cadence_months"):
-            self.add_error("cadence_months", "Enter the number of months between renewals.")
 
         if cleaned.get("applies_to") == AppliesTo.SPECIFIC_ROLES and not cleaned.get("roles"):
             self.add_error("roles", "Select at least one role, or choose a different rule.")
-
-        follows = cleaned.get("must_follow")
-        if not follows and cleaned.get("dependency_mode") == DependencyMode.GATE:
-            self.add_error("must_follow", "Choose the requirement this one waits for.")
-        if not follows and cleaned.get("due_months_after_prerequisite"):
-            self.add_error(
-                "due_months_after_prerequisite",
-                "Only applies when this requirement follows another one.",
-            )
 
         return cleaned
 
@@ -152,13 +160,14 @@ class RequirementWaiveForm(forms.Form):
     )
 
     def clean_reason(self):
-        value = (self.cleaned_data["reason"] or "").strip()
-        if len(value) < 10:
-            raise forms.ValidationError(
+        return substantive_reason(
+            self.cleaned_data["reason"],
+            minimum=10,
+            message=(
                 "Please give a fuller reason — this is the permanent record of why the "
                 "requirement was set aside."
-            )
-        return value
+            ),
+        )
 
 
 class WaiverReversalForm(forms.Form):
@@ -190,13 +199,14 @@ class WaiverReversalForm(forms.Form):
     )
 
     def clean_reason(self):
-        value = (self.cleaned_data["reason"] or "").strip()
-        if len(value) < 10:
-            raise forms.ValidationError(
+        return substantive_reason(
+            self.cleaned_data["reason"],
+            minimum=10,
+            message=(
                 "Please give a fuller reason — this is the record of why a recorded "
                 "decision was undone."
-            )
-        return value
+            ),
+        )
 
 
 class CRCRecordForm(forms.Form):
@@ -313,11 +323,6 @@ class ConvictionForm(forms.Form):
         ),
     )
 
-    @property
-    def is_automatic(self) -> bool:
-        category = (self.data.get("category") or "").strip()
-        return category in DisqualifyingConviction.AUTOMATIC_CATEGORIES
-
     def clean(self):
         cleaned = super().clean()
         category = cleaned.get("category", "")
@@ -409,13 +414,14 @@ class DiscretionaryOverrideForm(forms.Form):
             )
 
     def _clean_substantive(self, field: str, label: str) -> str:
-        value = (self.cleaned_data.get(field) or "").strip()
-        if len(value) < 20:
-            raise forms.ValidationError(
+        return substantive_reason(
+            self.cleaned_data.get(field),
+            minimum=20,
+            message=(
                 f"Please set out the {label} properly. This is the permanent record of "
                 "a decision that will be reviewed by leadership and possibly an insurer."
-            )
-        return value
+            ),
+        )
 
     def clean_reasoning(self):
         return self._clean_substantive("reasoning", "reasoning")
@@ -449,13 +455,23 @@ class RequirementFilterForm(forms.Form):
         ],
     )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, user=None, **kwargs):
         super().__init__(*args, **kwargs)
+        from apps.core.access import scope_departments, scope_roles
+
         from .models import RequirementType
 
         self.fields["requirement_type"].choices = [
             ("", "All requirement types")
         ] + list(RequirementType.choices)
+        # Scoped: this is the dashboard's filter, so an unscoped version would list every
+        # department and role name at the church on the first page a limited admin sees.
+        self.fields["department"].queryset = scope_departments(
+            Department.objects.filter(is_active=True), user
+        )
+        self.fields["role"].queryset = scope_roles(
+            Role.objects.filter(is_active=True).select_related("department"), user
+        )
         self.fields["role"].label_from_instance = (
             lambda role: f"{role.department.name} → {role.name}"
         )

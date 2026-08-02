@@ -36,17 +36,37 @@ Cross-origin referrer leakage is already handled globally by SECURE_REFERRER_POL
   </div>
 </div>
 
-<div class="callout callout--permanent">
-  <h3>Your data encryption key</h3>
-  <div class="keybox">{{ dek_b64 }}</div>
-  <div class="btn-row">
-    <a class="btn" href="{% url 'tenants:key_backup_download' %}" download>Download as a text file</a>
+{% if may_hold_the_key %}
+  <div class="callout callout--permanent">
+    <h3>Your data encryption key</h3>
+    <div class="keybox">{{ dek_b64 }}</div>
+    <div class="btn-row">
+      <a class="btn" href="{% url 'tenants:key_backup_download' %}" download>Download as a text file</a>
+    </div>
+    <dl class="facts mt1">
+      <dt>Fingerprint</dt><dd class="mono">{{ fingerprint }}</dd>
+    </dl>
   </div>
-  <dl class="facts mt1">
-    <dt>Fingerprint</dt><dd class="mono">{{ fingerprint }}</dd>
-  </dl>
-</div>
+{% else %}
+  {# Everyone is redirected here until the step is done, but the key itself decrypts
+     every volunteer record at the church, so it is shown only to somebody who runs the
+     church. Explaining that beats a blank page: the person is stuck and needs to know
+     who to go and find. #}
+  <div class="callout callout--info">
+    <h3>Someone else has to finish this step</h3>
+    <p>
+      {{ church.name }} has not yet saved its encryption key, and until it does, nobody
+      can use the system. The key decrypts every volunteer's personal information, so
+      only an administrator who manages this church's administrators is shown it.
+    </p>
+    <p class="mb0">
+      Ask them to sign in and complete this page. Nothing is lost in the meantime, and
+      your own access will work as soon as they have.
+    </p>
+  </div>
+{% endif %}
 
+{% if may_hold_the_key %}
 <div class="card">
   <h2>Where to put it</h2>
   <p><strong>Good places:</strong></p>
@@ -76,6 +96,7 @@ Cross-origin referrer leakage is already handled globally by SECURE_REFERRER_POL
     <button type="submit" class="btn btn--primary btn--lg">I have saved the key — continue</button>
   </form>
 </div>
+{% endif %}
 
 <p class="small muted">
   The platform operator also holds a copy in escrow, so a lost key does not mean lost

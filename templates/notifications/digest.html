@@ -66,6 +66,25 @@ things that render consistently.
     The daily summary of screening requirements coming due or overdue at {{ church_name }}.
     It goes to screening administrators only — this system never emails volunteers.
   </p>
+  {% if review.pending %}
+    <div style="margin: 0 0 20px; padding: 14px 16px; background: #fff8e6; border-left: 3px solid #d79a1e;">
+      <strong style="display:block; margin-bottom:6px;">Awaiting your review</strong>
+      <span style="font-size: 14px;">
+        {{ review.pending }} entr{{ review.pending|pluralize:"y,ies" }} recorded by an
+        administrator on a limited access level {{ review.pending|pluralize:"is,are" }}
+        waiting to be affirmed.
+        {% if review.stale %}
+          {{ review.stale }} of them {{ review.stale|pluralize:"has,have" }} been waiting
+          more than 30 days.
+        {% endif %}
+        These entries already count towards this church's compliance figures, so until they
+        are affirmed the report rests on evidence nobody has confirmed.
+      </span>
+      <div style="margin-top: 10px;">
+        <a href="{{ dashboard_url }}review/" style="font-size: 14px;">Open the review queue</a>
+      </div>
+    </div>
+  {% endif %}
   <p style="margin: 0; font-size: 12px; color: #7a8899;">
     Reminder timing is set per church by the platform operator.
   </p>

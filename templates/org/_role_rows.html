@@ -1,0 +1,28 @@
+{% comment %}
+The rows of a roles table. Shared by the church-wide role list and a department's
+detail page so the row markup exists once.
+
+Parameters:
+  roles           — the annotated queryset (needs .holders)
+  show_department — add the department column (the church-wide list)
+  empty_title     — bold line of the empty state
+  empty_hint      — optional second line of the empty state
+{% endcomment %}
+{% for role in roles %}
+  <tr>
+    {% if show_department %}
+      <td class="small"><a href="{% url 'org:department_detail' role.department.pk %}">{{ role.department.name }}</a></td>
+    {% endif %}
+    <td><a href="{% url 'org:role_detail' role.pk %}"><strong>{{ role.name }}</strong></a></td>
+    <td class="pill-row">
+      {% if role.is_leadership %}<span class="badge badge--info">Leadership</span>{% endif %}
+    </td>
+    <td class="num">{{ role.holders }}</td>
+    <td>{% if role.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</td>
+  </tr>
+{% empty %}
+  <tr><td colspan="{% if show_department %}5{% else %}4{% endif %}" class="empty">
+    <strong>{{ empty_title }}</strong>
+    {% if empty_hint %}{{ empty_hint }}{% endif %}
+  </td></tr>
+{% endfor %}

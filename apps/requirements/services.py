@@ -23,10 +23,14 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.core import audit
+from apps.core.access import refuse_self_recording
 from apps.core.models import AuditAction
 from apps.org.models import ScreeningBlock, Volunteer
+from apps.review.models import ReviewKind
+from apps.review.recording import open_if_unverified
 
 from .models import (
+    ONBOARDING_WINDOW_MONTHS,
     TURNING_18_CRC_DEADLINE_MONTHS,
     AgeRule,
     CRCNotClearOutcome,
@@ -46,6 +50,11 @@ REASON_NO_ROLE = "No current role requires this"
 REASON_UNDER_18 = "Under 18 — no criminal record check required"
 REASON_NO_BIRTH_DATE = "Date of birth not recorded — age rule cannot be applied"
 REASON_PREREQUISITE = "Not required until {name} is complete"
+
+
+def _label(instance: RequirementInstance) -> str:
+    """The audit entity_label every write in this module uses: person — requirement."""
+    return f"{instance.volunteer.display_name} — {instance.definition.name}"
 
 
 # ---------------------------------------------------------------------------
@@ -89,19 +98,7 @@ def sync_volunteer_requirements(
             # Stopped applying. Keep any completed history untouched; retire anything
             # still outstanding so it stops showing as owed.
             if instance and instance.status in RequirementStatus.outstanding_values():
-                instance.status = RequirementStatus.NOT_APPLICABLE
-                instance.not_applicable_reason = REASON_NO_ROLE
-                instance.due_on = None
-                instance.due_reason = ""
-                instance.save(
-                    update_fields=[
-                        "status",
-                        "not_applicable_reason",
-                        "due_on",
-                        "due_reason",
-                        "updated_at",
-                    ]
-                )
+                _hold_not_applicable(instance, REASON_NO_ROLE)
                 retired += 1
             continue
 
@@ -126,7 +123,7 @@ def sync_volunteer_requirements(
                     AuditAction.CREATE,
                     "RequirementInstance",
                     entity_id=instance.pk,
-                    entity_label=f"{volunteer.display_name} — {definition.name}",
+                    entity_label=_label(instance),
                     summary=f"Requirement added: {instance.get_status_display()}",
                     detail={"reason": instance.not_applicable_reason or "role requires it"},
                 )
@@ -326,7 +323,7 @@ def _activate(
             AuditAction.STATUS_CHANGE,
             "RequirementInstance",
             entity_id=instance.pk,
-            entity_label=f"{volunteer.display_name} — {definition.name}",
+            entity_label=_label(instance),
             summary=summary,
             detail={
                 "before": {"status": RequirementStatus.NOT_APPLICABLE, "reason": previous_reason},
@@ -347,8 +344,19 @@ def mark_requirement_complete(
     completed_on: datetime.date,
     *,
     notes: str = "",
+    open_review: bool = True,
 ) -> RequirementInstance:
-    """Record a requirement as satisfied and set the next renewal date."""
+    """
+    Record a requirement as satisfied and set the next renewal date.
+
+    ``open_review=False`` is for the document path. Recording a document completes the
+    requirement it backs, which is two writes for one act — and left alone that would put
+    two rows in the review queue, needing two clicks and allowing the two to be affirmed
+    separately. That is the "file disagrees with itself" failure BUILD_NOTES §1.15 was
+    written to close. So the document opens a single item that points at both, and this
+    one stays quiet. See :func:`apps.documents.services.complete_backing_requirement`.
+    """
+    refuse_self_recording(instance.volunteer)
     if instance.status == RequirementStatus.BLOCKED:
         raise ValidationError(
             "This requirement is blocked pending the outcome of a criminal record "
@@ -358,29 +366,40 @@ def mark_requirement_complete(
         raise ValidationError({"completed_on": "Cannot be in the future."})
 
     before = _snapshot(instance)
+    label = _label(instance)
     instance.mark_complete(completed_on, notes=notes)
 
     audit.record(
         AuditAction.STATUS_CHANGE,
         "RequirementInstance",
         entity_id=instance.pk,
-        entity_label=f"{instance.volunteer.display_name} — {instance.definition.name}",
+        entity_label=label,
         summary=f"Marked complete ({completed_on})"
         + (f", expires {instance.expires_on}" if instance.expires_on else ", no expiry"),
         detail={"changed": _diff(before, _snapshot(instance))},
     )
+    if open_review:
+        _open_review(
+            kind=ReviewKind.REQUIREMENT_COMPLETION,
+            volunteer=instance.volunteer,
+            entity_type="RequirementInstance",
+            entity_id=instance.pk,
+            entity_label=label,
+            before_state=before,
+            summary=f"Marked complete ({completed_on}) — awaiting affirmation",
+        )
     refresh_dependents(instance)
     return instance
 
 
 @transaction.atomic
-def start_requirement(instance: RequirementInstance, started_on: datetime.date | None = None):
+def start_requirement(instance: RequirementInstance):
     """Mark a requirement as under way. Used to time the three-month onboarding window."""
     if instance.status not in (RequirementStatus.NOT_STARTED, RequirementStatus.OVERDUE):
         return instance
 
     before = _snapshot(instance)
-    instance.started_on = started_on or timezone.localdate()
+    instance.started_on = timezone.localdate()
     if instance.status == RequirementStatus.NOT_STARTED:
         instance.status = RequirementStatus.IN_PROGRESS
     instance.save(update_fields=["started_on", "status", "updated_at"])
@@ -389,7 +408,7 @@ def start_requirement(instance: RequirementInstance, started_on: datetime.date |
         AuditAction.STATUS_CHANGE,
         "RequirementInstance",
         entity_id=instance.pk,
-        entity_label=f"{instance.volunteer.display_name} — {instance.definition.name}",
+        entity_label=_label(instance),
         summary="Marked in progress",
         detail={"changed": _diff(before, _snapshot(instance))},
     )
@@ -411,6 +430,7 @@ def waive_requirement(
     exemption and a Not Clear process, but no route to simply skipping the check for
     an adult in a position of trust.
     """
+    refuse_self_recording(instance.volunteer)
     if not (reason or "").strip():
         raise ValidationError({"reason": "A waiver must record why it was granted."})
     if instance.definition.is_crc:
@@ -442,10 +462,19 @@ def waive_requirement(
         AuditAction.WAIVE,
         "RequirementInstance",
         entity_id=instance.pk,
-        entity_label=f"{instance.volunteer.display_name} — {instance.definition.name}",
+        entity_label=_label(instance),
         summary=f"Waived by {waived_by}",
         # The reason is encrypted in the instance and again here in the audit detail.
         detail={"reason": reason, "changed": _diff(before, _snapshot(instance))},
+    )
+    _open_review(
+        kind=ReviewKind.WAIVER,
+        volunteer=instance.volunteer,
+        entity_type="RequirementInstance",
+        entity_id=instance.pk,
+        entity_label=_label(instance),
+        before_state=before,
+        summary="Waived — awaiting affirmation",
     )
     # A waiver counts as the prerequisite being met, so it can open a gate behind it.
     refresh_dependents(instance)
@@ -500,6 +529,7 @@ def reverse_waiver(
     *,
     reason: str,
     reversed_by: str,
+    restore_due: tuple | None = None,
 ) -> RequirementInstance:
     """
     Undo a waiver, and record why.
@@ -518,10 +548,12 @@ def reverse_waiver(
     sweep and the reminder digests both start acting on it again, and it may show as
     overdue straight away.
 
-    One thing is not restored. ``waive_requirement`` nulls ``due_on``/``due_reason`` and
-    they are not recoverable from the row. In practice that is close to harmless — the
-    criminal record check is the main user of hard deadlines and cannot be waived at all
-    — so this does not carry a shadow copy around for it.
+    ``waive_requirement`` nulls ``due_on``/``due_reason`` and they are not recoverable
+    from the row, so this used to lose them. ``restore_due`` closes that gap where a
+    caller has a snapshot — which the review gate always does, since sending an entry back
+    is exactly the case where losing a deadline would matter. Without a snapshot the old
+    behaviour stands, and it remains close to harmless: the criminal record check is the
+    main user of hard deadlines and cannot be waived at all.
     """
     if instance.status != RequirementStatus.WAIVED:
         raise ValidationError("This requirement is not waived, so there is nothing to reverse.")
@@ -539,15 +571,11 @@ def reverse_waiver(
     instance.waived_reason = ""
     instance.waived_by = ""
     instance.waived_on = None
-    instance.save(
-        update_fields=[
-            "status",
-            "waived_reason",
-            "waived_by",
-            "waived_on",
-            "updated_at",
-        ]
-    )
+    fields = ["status", "waived_reason", "waived_by", "waived_on", "updated_at"]
+    if restore_due is not None:
+        instance.due_on, instance.due_reason = restore_due
+        fields += ["due_on", "due_reason"]
+    instance.save(update_fields=fields)
     # Moves it to overdue if a renewal date passed while it sat waived.
     instance.recompute()
 
@@ -555,7 +583,7 @@ def reverse_waiver(
         AuditAction.WAIVER_REVERSED,
         "RequirementInstance",
         entity_id=instance.pk,
-        entity_label=f"{instance.volunteer.display_name} — {instance.definition.name}",
+        entity_label=_label(instance),
         # The comment goes in the summary, not only the detail. The audit entry's detail
         # is recorded but not displayed, so a reason kept only there would be invisible
         # to the very reader it is written for. The form caps the comment so it fits.
@@ -594,6 +622,7 @@ def record_crc(
     the **report date** (Build Spec §4.3). A ``Not Clear`` result blocks the volunteer
     pending one of the two outcomes the policy allows.
     """
+    refuse_self_recording(volunteer)
     if report_date > timezone.localdate():
         raise ValidationError({"report_date": "Cannot be in the future."})
     if volunteer.is_permanently_disqualified:
@@ -602,7 +631,11 @@ def record_crc(
             "policy. No further criminal record check can change that."
         )
 
-    instance = _crc_instance(volunteer)
+    instance = crc_instance_for(volunteer)
+    # Captured before anything moves, so a retraction can restore the requirement and the
+    # previous check's supersession truthfully.
+    before = _snapshot(instance) if instance else {}
+    before["screening_block"] = volunteer.screening_block
 
     record = CRCRecord(
         volunteer=volunteer,
@@ -630,6 +663,9 @@ def record_crc(
     if previous:
         previous.superseded_by = record
         previous.save(update_fields=["superseded_by", "updated_at"])
+        # Which check this one displaced, so a retraction can put it back as the operative
+        # one rather than leaving the file with no current check at all.
+        before["superseded_by_id"] = previous.pk
 
     if result == CRCResult.CLEARED:
         if instance:
@@ -684,14 +720,30 @@ def record_crc(
             "issuing_body": issuing_body,
         },
     )
+    _open_review(
+        kind=ReviewKind.CRC,
+        volunteer=volunteer,
+        entity_type="CRCRecord",
+        entity_id=record.pk,
+        entity_label=f"{volunteer.display_name} — criminal record check",
+        before_state=before,
+        affected_entity=("RequirementInstance", instance.pk) if instance else None,
+        summary=f"Criminal record check recorded ({result}) — awaiting affirmation",
+    )
     logger.info(
         "CRC recorded volunteer=%s result=%s report_date=%s", volunteer.pk, result, report_date
     )
     return record
 
 
-def _crc_instance(volunteer: Volunteer) -> RequirementInstance | None:
-    """The volunteer's criminal-record-check requirement instance, if they have one."""
+def crc_instance_for(volunteer: Volunteer) -> RequirementInstance | None:
+    """
+    The volunteer's criminal-record-check requirement instance, if they have one.
+
+    The single definition of which CRC instance counts — the ``is_active`` filter and
+    the sequence ordering matter, or a page could show a retired CRC definition that
+    :func:`record_crc` would never write to.
+    """
     from .models import RequirementType
 
     return (
@@ -718,11 +770,16 @@ def record_convictions(crc_record: CRCRecord, entries: list[dict]) -> dict:
     :meth:`Volunteer.set_screening_block` will not later allow to be lifted. There is
     no override — not here, not in the views, not anywhere (Build Spec §4.3).
     """
+    refuse_self_recording(crc_record.volunteer)
     if crc_record.result != CRCResult.NOT_CLEAR:
         raise ValidationError("Convictions are only recorded against a 'Not Clear' result.")
 
     volunteer = crc_record.volunteer
     created, automatic = [], False
+    block_before = volunteer.screening_block
+    assignments_before = list(
+        volunteer.assignments.filter(is_active=True).values_list("role__name", flat=True)
+    )
 
     for entry in entries:
         conviction = DisqualifyingConviction(
@@ -753,6 +810,32 @@ def record_convictions(crc_record: CRCRecord, entries: list[dict]) -> dict:
                 "documented leadership decision"
             ),
             detail={"categories": [c.category for c in created], "automatic": False},
+        )
+
+    if created:
+        # Reviewed, at the owner's explicit direction, and the queue entry has to be
+        # honest about what affirmation can mean here. For a discretionary flag, sending
+        # it back is a real correction. For an **automatic** disqualifier it is not: the
+        # block cannot be lifted (``set_screening_block`` refuses), the convictions cannot
+        # be deleted (``delete()`` raises), and the ended assignments have no inverse. The
+        # snapshot carries what was ended so the send-back form can name it, and the form
+        # says plainly that it records a dispute rather than undoing anything.
+        _open_review(
+            kind=ReviewKind.CRC,
+            volunteer=volunteer,
+            entity_type="DisqualifyingConviction",
+            entity_id=created[0].pk,
+            entity_label=f"{volunteer.display_name} — {len(created)} conviction(s)",
+            before_state={
+                "screening_block": block_before,
+                "ended_assignments": assignments_before if automatic else [],
+            },
+            affected_entity=("CRCRecord", crc_record.pk),
+            summary=(
+                "Permanent disqualification recorded — awaiting affirmation"
+                if automatic
+                else f"{len(created)} discretionary red flag(s) — awaiting affirmation"
+            ),
         )
 
     return {
@@ -830,6 +913,7 @@ def record_discretionary_override(
     volunteer is already permanently disqualified. Reasoning and mitigation steps are
     mandatory and permanently retained (Build Spec §4.3).
     """
+    refuse_self_recording(crc_record.volunteer)
     if conviction and conviction.is_automatic_disqualifier:
         raise ValidationError(
             "Automatic disqualifiers under the Plan to Protect policy cannot be "
@@ -853,10 +937,13 @@ def record_discretionary_override(
     override.save()  # full_clean() runs inside save() for this model.
 
     volunteer = crc_record.volunteer
+    block_before = volunteer.screening_block
+    ended_assignments = []
     if decision == DiscretionaryOverride.Decision.DECLINED:
         volunteer.set_screening_block(ScreeningBlock.WITHDRAWN)
-        for assignment in volunteer.assignments.filter(is_active=True):
+        for assignment in volunteer.assignments.filter(is_active=True).select_related("role"):
             assignment.end()
+            ended_assignments.append(assignment.role.name)
     else:
         # Approved: lift the Not Clear block. The check itself still has to be
         # recorded as cleared or fingerprint-verified to satisfy the requirement.
@@ -878,6 +965,26 @@ def record_discretionary_override(
             "mitigation_steps": mitigation_steps,
         },
     )
+    _open_review(
+        kind=ReviewKind.OVERRIDE,
+        volunteer=volunteer,
+        entity_type="DiscretionaryOverride",
+        entity_id=override.pk,
+        entity_label=f"{volunteer.display_name} — leadership decision",
+        # No requirement snapshot: an override is immutable, so send-back cannot restore
+        # anything. What the snapshot carries is what the decision *did* — the block it set
+        # and the assignments it ended — so the send-back form can name them and say
+        # plainly that they will not be undone.
+        before_state={
+            "screening_block": block_before,
+            "ended_assignments": ended_assignments,
+        },
+        affected_entity=("CRCRecord", crc_record.pk),
+        summary=(
+            f"Leadership decision recorded ({override.get_decision_display()}) — "
+            "awaiting affirmation"
+        ),
+    )
     return override
 
 
@@ -894,6 +1001,7 @@ def resolve_not_clear(
     Two outcomes exist in the policy: a fingerprint-verified check is submitted with
     the convictions disclosed and verified, or the volunteer withdraws.
     """
+    refuse_self_recording(crc_record.volunteer)
     if crc_record.result != CRCResult.NOT_CLEAR:
         raise ValidationError("Only a 'Not Clear' result needs an outcome recorded.")
     if outcome not in CRCNotClearOutcome.values:
@@ -1030,7 +1138,7 @@ def onboarding_window_breached(volunteer: Volunteer, as_of: datetime.date | None
     if not dates:
         return False
 
-    return min(dates) < add_months_to(as_of, -3)
+    return min(dates) < add_months_to(as_of, -ONBOARDING_WINDOW_MONTHS)
 
 
 # ---------------------------------------------------------------------------
@@ -1039,13 +1147,22 @@ def onboarding_window_breached(volunteer: Volunteer, as_of: datetime.date | None
 
 
 def _snapshot(instance: RequirementInstance) -> dict:
-    """Plaintext-only field snapshot for the audit diff."""
+    """
+    Plaintext-only field snapshot, for the audit diff and for review send-back.
+
+    ``due_reason`` is here because of send-back rather than the diff. ``mark_complete``
+    nulls both ``due_on`` and ``due_reason``, and neither is recoverable from the row
+    afterwards — so a reverted completion would silently drop a real deadline, such as the
+    criminal-record-check date a volunteer acquires on turning 18. This snapshot is the
+    only place it survives.
+    """
     return {
         "status": instance.status,
         "started_on": str(instance.started_on or ""),
         "completed_on": str(instance.completed_on or ""),
         "expires_on": str(instance.expires_on or ""),
         "due_on": str(instance.due_on or ""),
+        "due_reason": instance.due_reason,
     }
 
 
@@ -1053,3 +1170,14 @@ def _diff(before: dict, after: dict) -> dict:
     from apps.core.models import diff_summary
 
     return diff_summary(before, after)
+
+
+def _open_review(**kwargs):
+    """
+    Queue this entry for a primary admin's affirmation, if the actor needs one.
+
+    A thin pass-through so every writer in this module reads the same, and so the import
+    of :mod:`apps.review` sits in one place. Returns None when no review is needed, which
+    is the case for a primary admin, the nightly sweep and every management command.
+    """
+    return open_if_unverified(**kwargs)

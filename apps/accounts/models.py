@@ -1,8 +1,11 @@
 """
 Accounts for the two kinds of human who use VMS.
 
-* **Screening admins** — live in their church's tenant schema. All of them hold
-  equal permissions within that church (Build Spec §2).
+* **Screening admins** — live in their church's tenant schema. What each of them may do
+  is set by their **access level** (:class:`apps.core.models.AccessLevel`). Build Spec §2
+  used to say they all held equal permissions; amended 2026-07-29 at the owner's
+  direction, and what used to be true of everybody is now true of a *Primary Admin*. See
+  BUILD_NOTES §1.21.
 * **The platform super-admin** — lives in the ``public`` schema, provisions
   churches, and does not browse church data day to day.
 
@@ -180,24 +183,16 @@ class User(AbstractBaseUser, PermissionsMixin):
     def get_short_name(self) -> str:
         return self.first_name or self.get_full_name()
 
+    @property
+    def display_name(self) -> str:
+        """The name for audit labels and bylines — never blank, names are optional."""
+        return self.get_full_name() or "administrator"
+
     # -- Capability flags used by templates and views ---------------------
 
     @property
     def has_passkey(self) -> bool:
         return self.passkeys.filter(is_active=True).exists()
-
-    @property
-    def can_remove_last_passkey(self) -> bool:
-        """
-        Always true, now that a sign-in link is the way back in.
-
-        This used to require a working password *and* a confirmed authenticator app,
-        because removing the final passkey with neither was a permanent lockout. With
-        :class:`LoginLink` there is no such state: an account with no passkey at all
-        can recover itself by email and enrol a new one. Kept as a property rather
-        than deleted so the guard has somewhere to live if that ever stops being true.
-        """
-        return True
 
 
 class Passkey(models.Model):
@@ -227,8 +222,6 @@ class Passkey(models.Model):
         default="",
         help_text="A name for this device, e.g. 'work laptop'.",
     )
-    transports = models.CharField(max_length=100, blank=True, editable=False)
-    is_discoverable = models.BooleanField(default=True, editable=False)
 
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now, editable=False)

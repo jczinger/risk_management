@@ -249,6 +249,24 @@ class DashboardTests(ReportingBase):
         self.assertNotContains(response, "<!doctype html>")
         self.assertContains(response, "Overdue")
 
+    def test_htmx_request_computes_only_what_the_partial_renders(self):
+        """
+        A filter interaction re-renders the buckets and nothing else, so the headline
+        tiles, review summary and per-department roll-up must not be recomputed —
+        that used to be 15+ queries per keystroke of filtering.
+        """
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self.onboard(self.make_volunteer())
+
+        with CaptureQueriesContext(connection) as full_page:
+            self.client.get(reverse("dashboard"))
+        with CaptureQueriesContext(connection) as partial:
+            self.client.get(reverse("dashboard"), HTTP_HX_REQUEST="true")
+
+        self.assertLess(len(partial), len(full_page))
+
     def test_headline_counts(self):
         self.onboard(self.make_volunteer(first_name="Serving", last_name="Person"))
         self.make_volunteer(first_name="No", last_name="Role")
@@ -424,6 +442,19 @@ class VolunteerFileTests(ReportingBase):
         self.assertGreater(len(data["onboarding"]), 0)
         self.assertEqual(len(data["crc_records"]), 1)
 
+    def test_a_waived_recurring_requirement_says_who_waived_it(self):
+        from apps.requirements.services import waive_requirement
+
+        instance = self.volunteer.requirement_instances.filter(
+            definition__is_onboarding=False,
+            definition__name="Plan to Protect refresher training",
+        ).first()
+        self.assertIsNotNone(instance)
+        waive_requirement(instance, reason="Equivalent training verified", waived_by="Pat Chair")
+
+        response = self.client.get(reverse("reporting:volunteer_file", args=[self.volunteer.pk]))
+        self.assertContains(response, "waived by Pat Chair")
+
 
 class AuditViewerTests(ReportingBase):
     """The read-only audit trail."""
@@ -438,6 +469,33 @@ class AuditViewerTests(ReportingBase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Audit trail")
         self.assertContains(response, "append-only")
+
+    def test_a_scoped_level_holding_view_audit_anyway_sees_nothing(self):
+        """
+        The second layer behind ``AccessLevel.clean()``. A scoped level cannot
+        normally hold view_audit — the model refuses the combination — so this
+        forges the forbidden row past validation and asserts the views answer
+        with nothing rather than the whole church's trail.
+        """
+        from apps.core.models import AccessLevel, AuditEvent
+
+        level = self.department_admin_level()
+        # Past clean(), the way a bad migration or manual UPDATE would go.
+        AccessLevel.objects.filter(pk=level.pk).update(can_view_audit=True)
+
+        admin = self.make_department_admin(
+            email="scoped-audit@test.ca", departments=[self.children]
+        )
+        client = self.signed_in_client(admin)
+
+        response = client.get(reverse("reporting:audit_trail"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["events"]), 0)
+
+        event = AuditEvent.objects.first()
+        self.assertIsNotNone(event)
+        detail = client.get(reverse("reporting:audit_event_detail", args=[event.pk]))
+        self.assertEqual(detail.status_code, 404)
 
     def test_entries_can_be_filtered_by_action(self):
         from apps.core.models import AuditAction

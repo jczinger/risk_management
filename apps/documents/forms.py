@@ -94,10 +94,9 @@ class DocumentForm(forms.Form):
         return value
 
     def clean_upload(self):
+        from .services import check_upload_size
+
         upload = self.cleaned_data.get("upload")
-        if upload and upload.size and upload.size > settings.VMS_MAX_UPLOAD_BYTES:
-            raise forms.ValidationError(
-                f"That file is {upload.size / 1024 / 1024:.1f} MB. The limit is "
-                f"{settings.VMS_MAX_UPLOAD_MB} MB."
-            )
+        if upload:
+            check_upload_size(upload)
         return upload

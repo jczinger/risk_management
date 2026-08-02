@@ -1,0 +1,39 @@
+{% comment %}
+One queue row. Rendered both by the full page and by the htmx affirm swap, so the two
+cannot drift — the same split as requirements/_instance_row.html.
+{% endcomment %}
+<tr id="review-{{ item.pk }}">
+  <td class="small nowrap">
+    {{ item.created_at|date:"j M Y" }}
+    {% if item.is_stale %}<br><span class="badge badge--warn">{{ item.age_in_days }} days</span>{% endif %}
+  </td>
+  <td>
+    <a href="{% url 'org:volunteer_detail' item.volunteer.pk %}"><strong>{{ item.volunteer.display_name }}</strong></a>
+    {% if not item.volunteer.is_active %} <span class="badge badge--muted">no longer serving</span>{% endif %}
+    <div class="small muted">{{ item.entity_label }}</div>
+  </td>
+  <td class="small">{{ item.get_kind_display }}</td>
+  <td class="small">
+    {{ item.recorded_by_display }}
+    {% if item.department %}<div class="muted">{{ item.department.name }}</div>{% endif %}
+  </td>
+  <td class="right">
+    {% if error %}
+      <span class="badge badge--warn">{{ error }}</span>
+    {% elif just_decided or not item.is_open %}
+      <span class="badge badge--ok">{{ item.get_status_display }}</span>
+      {% if item.reviewed_by_display %}<div class="small muted">by {{ item.reviewed_by_display }}</div>{% endif %}
+    {% elif can_review %}
+      <div style="display:flex; gap:.35rem; justify-content:flex-end; flex-wrap:wrap">
+        <button class="btn btn--sm btn--primary"
+                hx-post="{% url 'review:affirm' item.pk %}"
+                hx-target="#review-{{ item.pk }}"
+                hx-swap="outerHTML"
+                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>Affirm</button>
+        <a class="btn btn--sm" href="{% url 'review:send_back' item.pk %}">Send back</a>
+      </div>
+    {% else %}
+      <span class="badge">Awaiting review</span>
+    {% endif %}
+  </td>
+</tr>

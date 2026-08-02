@@ -39,8 +39,12 @@ Stated plainly, because a security model that overclaims is worse than none.
 - **A compromised application host.** If someone has code execution as the app, they have
   `PLATFORM_MASTER_KEY` from the environment and can decrypt everything. Field encryption protects
   data *at rest*, not a live compromised server.
-- **A malicious or compromised administrator.** A screening admin is authorised to read their
-  church's records. The audit trail records what they did; it does not prevent it.
+- **A malicious or compromised administrator.** A screening admin is authorised to read the
+  records their access level reaches — the whole church for a Primary Admin, their own
+  departments for a limited level. The audit trail records what they did; it does not prevent
+  it. Access levels narrow the blast radius of one compromised account; they do not make one
+  harmless. They cannot screen themselves (see *Separation of duties*), but they can screen a
+  colleague who screens them back.
 - **The platform operator.** The operator holds the master key and can decrypt any church's data.
   This is an accepted, documented trade-off (see below).
 - **Traffic analysis of encrypted columns.** Ciphertext length leaks approximate plaintext length.
@@ -90,6 +94,11 @@ The accepted trade-off, from PRD §5: *the operator can technically decrypt tena
 exchange for a guarantee that no church can lose its own records.* For a district tool serving
 churches with no IT staff, losing a key permanently would be the worse failure. Every key export
 writes an entry into that church's own audit trail, so the access is visible to them.
+
+That last sentence was not true of one route until 2 August 2026. The in-church key download
+(`/key-backup/download/`) was reachable by any signed-in administrator, at any time, and wrote no
+audit entry at all. It now requires the capability to manage the church's administrators, and it
+is audited like every other export. See BUILD_NOTES §1.22.
 
 ---
 
@@ -209,13 +218,119 @@ mailboxes with their own strong second factor. Neither is something VMS can enfo
 
 ---
 
+## Access within a church
+
+Until 2026-07-29 every screening admin at a church could reach everything in it. Each one now
+holds an **access level**, and a limited level is confined to the departments it is given. See
+BUILD_NOTES §1.21 for the reasoning; what matters here is what the boundary does and does not
+contain.
+
+### What it contains
+
+- **Volunteer records.** A limited level sees only volunteers who have **ever** served in its
+  departments. Anything else 404s — not 403s. A 403 would confirm that a volunteer with that
+  id exists at this church and is in some other department, and walked over the id range that
+  is a membership list, including which ids belong to minors.
+- **Documents.** Scoped the same way, and this is the one worth naming: the primary key space
+  is small and sequential, and the download view decrypts and streams. `read_document` writes
+  an audit entry naming the volunteer on every read, so enumeration would be conspicuous —
+  detectable, not prevented. The queryset is what prevents it.
+- **Aggregates.** Dashboard counts, the per-department summary, and the department and role
+  dropdowns are all scoped. None of them names anybody, so none would fail a per-record test
+  while between them describing the shape of the whole church.
+- **What a level can grant.** Nobody can hand out an access level wider than their own, nor
+  departments they do not administer themselves. Enforced by the form's querysets for the HTTP
+  path and again in `apply_grant` for anything that never builds a form.
+
+### What it does not contain
+
+- **Field-level privacy.** A department admin sees the *whole* record of a volunteer in scope —
+  date of birth, address, medical notes, criminal-record-check results. The boundary is which
+  volunteers, not how much of each. That was a deliberate decision by the owner.
+- **The audit trail.** It cannot be scoped and is therefore refused to any limited level, by a
+  model constraint rather than a convention. `AuditEvent` records no department and cannot be
+  given one: its pointer to the affected row is a pair of strings, chosen because ContentType
+  ids are not tenant-stable. A partial filter would be worse than refusing, because it would
+  *look* scoped while missing every requirement, document and check entry about the same
+  person.
+- **Scope shrinking.** Access is "ever served in my departments", so it only grows. Assigning
+  a volunteer to a role adds them to that admin's view permanently; ending the assignment does
+  not remove them. Intended — a department keeps the files it screened, and records involving
+  minors are retained permanently — but it means "may manage assignments" also reads as "may
+  add any reachable volunteer to my own view, for good".
+
+### The review step, and what it is worth
+
+Everything an administrator on a limited level records is affirmed by a Primary Admin. Two
+honest limitations:
+
+- **A pending entry already counts as compliant.** It takes effect on the spot and is flagged
+  unverified. So a compliance report can read "compliant" on evidence nobody has confirmed.
+  That is why the backlog appears on the dashboard, in the queue, as a note on the report
+  itself, and in the nightly digest once anything has waited 30 days.
+- **A permanent disqualification cannot be reviewed away.** A limited level may record one, at
+  the owner's explicit decision. Nothing in VMS lifts a disqualification, deletes a conviction,
+  or restores an ended assignment — by design, and tests hunt for a route back. So sending such
+  an entry back records that it was disputed; it does not undo it. The form says so before the
+  click and names what will stand.
+
+The recommendation at design time was to reserve that one step to a Primary Admin. The owner
+decided otherwise; this section exists so the consequence is written down rather than
+discovered.
+
+---
+
+## Separation of duties
+
+Plan to Protect presumes the person being screened and the person recording the screening are two
+different people. Until 2 August 2026 VMS could not express that, because nothing connected an
+administrator's account to their own volunteer record — so an administrator could tick their own
+training and record their own criminal record check as clear, and no rule was broken because no
+rule could be stated. See BUILD_NOTES §1.22.
+
+**An administrator now has a screening file, and may not write to it.**
+
+- On a limited access level: refused outright. Somebody with access to the whole church exists,
+  by construction — that is who created their account.
+- Seeing the whole church: refused while another such administrator exists. Allowed when they are
+  the last one, with the audit entry saying so, because a single-administrator church would
+  otherwise be unable to complete its own file at all and would keep it on paper instead.
+
+Refused means every write: editing the record, assigning or ending their own ministry roles,
+completing or waiving their own requirements, recording their own criminal record check,
+attaching their own documents. Enforced at each view and again inside the screening services, so
+a caller that is not a view is refused too.
+
+**Reading is not restricted.** They see their own file in full, with a note explaining why the
+buttons are absent. Hiding somebody's own compliance status from them would only teach them to
+keep a private copy somewhere VMS cannot see.
+
+**What this does not defend against.** Two administrators can still screen each other by
+arrangement, and nothing here detects that. Nor does it stop an administrator creating a file for
+a *family member* and screening them — VMS knows who somebody is, not who they are related to.
+The rule closes the case it can state precisely; the audit trail is what covers the rest.
+
+### The link between an account and a file
+
+Set automatically when an administrator is created. Where a volunteer already exists under the
+same name, VMS creates nothing and asks: two people can share a name, and merging two screening
+files has no undo.
+
+The link can only be chosen by *another* church-wide administrator, and there is no way to remove
+one. Both restrictions exist because the link is what makes the rule above enforceable — an
+administrator free to re-point their own link at a stranger's record would be free to screen
+themselves again.
+
+---
+
 ## Tenant isolation
 
 Two independent barriers, either of which would be sufficient:
 
 1. **Schema separation.** Every church's data is in its own Postgres schema. Primary keys are
-   per-schema, so an id from one church resolves to nothing in another. Sessions live in the
-   tenant schema, so a cookie issued by one church is meaningless at another.
+   per-schema, so an id from one church resolves to nothing in another. A session issued at
+   one church does not authenticate at another — though not for the reason it first appears;
+   see the paragraph on `_auth_user_hash` below, which is the actual mechanism.
 2. **Separate encryption keys.** Even if schema separation were bypassed — a bad raw query, a
    botched restore — one church's key cannot decrypt another's data.
 

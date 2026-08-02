@@ -79,6 +79,10 @@ TENANT_APPS = [
     "apps.documents",
     "apps.notifications",
     "apps.reporting",
+    # The review queue. Split into `recording` (called by the writers, and deliberately
+    # ignorant of them) and `services` (which calls back into requirements and documents
+    # to revert), so the dependency graph stays acyclic by rule rather than by accident.
+    "apps.review",
 ]
 
 # Django needs each app listed exactly once; order follows SHARED_APPS then the
@@ -121,6 +125,12 @@ MIDDLEWARE = [
     "django_htmx.middleware.HtmxMiddleware",
     # Records the acting user + request metadata for the audit trail.
     "apps.core.middleware.AuditContextMiddleware",
+    # Refuses any church-side view that never declared what capability it needs, so a
+    # view written without one is unreachable rather than reachable by everybody. Its
+    # process_view hook runs after every middleware below has had its request phase, so
+    # the two forced-step gates still take precedence — which is what we want: a new
+    # admin should be sent to passkey enrolment, not handed a 403.
+    "apps.core.middleware.AccessGateMiddleware",
     # Holds an account with no passkey at enrolment. Before the key-backup gate: a new
     # church's admin trips both at once, and the passkey has to come first.
     "apps.accounts.middleware.ForcePasskeyMiddleware",
@@ -257,7 +267,6 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 
-MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 STORAGES = {

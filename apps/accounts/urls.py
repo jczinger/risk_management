@@ -51,6 +51,16 @@ urlpatterns = [
         name="admin_reissue_link",
     ),
     path("administrators/<int:pk>/access/", views.admin_access, name="admin_access"),
+    path(
+        "administrators/<int:pk>/volunteer/link/",
+        views.admin_link_volunteer,
+        name="admin_link_volunteer",
+    ),
+    path(
+        "administrators/<int:pk>/volunteer/create/",
+        views.admin_create_volunteer,
+        name="admin_create_volunteer",
+    ),
     # Access levels — what an administrator is allowed to do
     path("access-levels/", views.access_level_list, name="access_level_list"),
     path("access-levels/new/", views.access_level_create, name="access_level_create"),

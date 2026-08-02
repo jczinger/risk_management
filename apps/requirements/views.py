@@ -13,15 +13,24 @@ The CRC screens are where the policy's hardest rules become interface decisions:
 from __future__ import annotations
 
 import logging
+from collections import Counter
 
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST, require_http_methods
 
 from apps.core import audit
+from apps.core.access import (
+    Capability,
+    may_record_against,
+    require_own_record_not_touched,
+    requires,
+    scope_crc_records,
+    scope_instances,
+    scope_volunteers,
+)
 from apps.core.models import AuditAction, diff_summary
 from apps.org.models import Volunteer
 
@@ -45,6 +54,7 @@ from .models import (
 )
 from .seed import seed_default_template
 from .services import (
+    crc_instance_for,
     mark_requirement_complete,
     record_convictions,
     record_crc,
@@ -52,7 +62,6 @@ from .services import (
     resolve_not_clear,
     reverse_waiver,
     start_requirement,
-    sync_volunteer_requirements,
     waive_requirement,
 )
 
@@ -60,11 +69,84 @@ logger = logging.getLogger("vms.requirements")
 
 
 # ---------------------------------------------------------------------------
+# Scoped lookups
+# ---------------------------------------------------------------------------
+#
+# A requirement, a check or a conviction belongs to a volunteer, and a volunteer belongs
+# to departments. Every view below reaches its subject through one of these so that a
+# record outside the caller's departments 404s rather than 403s — see
+# :mod:`apps.core.access` for why the distinction matters.
+
+
+def _instance_or_404(request, pk: int):
+    return get_object_or_404(
+        scope_instances(
+            RequirementInstance.objects.select_related("volunteer", "definition"), request.user
+        ),
+        pk=pk,
+    )
+
+
+def _crc_or_404(request, pk: int, queryset=None):
+    queryset = CRCRecord.objects.select_related("volunteer") if queryset is None else queryset
+    return get_object_or_404(scope_crc_records(queryset, request.user), pk=pk)
+
+
+def _volunteer_or_404(request, pk: int):
+    return get_object_or_404(scope_volunteers(Volunteer.objects.all(), request.user), pk=pk)
+
+
+# The writable twins. A view that records something reaches for one of these instead, so
+# the "not your own file" refusal arrives with the record rather than as a separate line
+# somebody can forget. 403, not 404 — they can already see it. See
+# :func:`apps.core.access.may_record_against`.
+
+
+def _writable_instance_or_404(request, pk: int):
+    instance = _instance_or_404(request, pk)
+    require_own_record_not_touched(request.user, instance.volunteer)
+    return instance
+
+
+def _writable_crc_or_404(request, pk: int, queryset=None):
+    record = _crc_or_404(request, pk, queryset)
+    require_own_record_not_touched(request.user, record.volunteer)
+    return record
+
+
+def _writable_volunteer_or_404(request, pk: int):
+    volunteer = _volunteer_or_404(request, pk)
+    require_own_record_not_touched(request.user, volunteer)
+    return volunteer
+
+
+def _flash_errors(request, exc: ValidationError) -> None:
+    """Every message from a service-layer refusal, as its own flash line."""
+    for error in exc.messages:
+        messages.error(request, error)
+
+
+def _annotate_review(instance):
+    """
+    Hang the "unverified" flag on one instance.
+
+    Small, and the only way the flag is ever set on a single row — which is the point.
+    Every render path has to use it, or a page shows a badge that another page does not.
+    """
+    from apps.review.recording import open_review_index
+
+    open_review_index(volunteer=instance.volunteer).annotate(
+        [instance], entity_type="RequirementInstance"
+    )
+    return instance
+
+
+# ---------------------------------------------------------------------------
 # Definitions — the church's own requirement list
 # ---------------------------------------------------------------------------
 
 
-@login_required
+@requires(Capability.MANAGE_REQUIREMENTS)
 def definition_list(request):
     definitions = RequirementDefinition.objects.prefetch_related("roles").order_by(
         "-is_active", "sequence", "name"
@@ -81,7 +163,7 @@ def definition_list(request):
     )
 
 
-@login_required
+@requires(Capability.MANAGE_REQUIREMENTS)
 @require_http_methods(["GET", "POST"])
 def definition_create(request):
     form = RequirementDefinitionForm(request.POST or None)
@@ -109,15 +191,19 @@ def definition_create(request):
     return render(request, "requirements/definition_form.html", {"form": form, "definition": None})
 
 
-@login_required
+@requires(Capability.MANAGE_REQUIREMENTS)
 def definition_detail(request, pk: int):
     definition = get_object_or_404(
         RequirementDefinition.objects.prefetch_related("roles"), pk=pk
     )
-    instances = definition.instances.select_related("volunteer").filter(volunteer__is_active=True)
-    counts: dict[str, int] = {}
-    for instance in instances:
-        counts[instance.status] = counts.get(instance.status, 0) + 1
+    # Unscoped, deliberately. A requirement definition is church-wide configuration, not
+    # a volunteer's record, and MANAGE_REQUIREMENTS is not granted to any limited access
+    # level — the model refuses to combine the two for the audit trail and the same
+    # reasoning applies here: "how many volunteers have satisfied this requirement?" is a
+    # church-wide question that cannot be answered a department at a time.
+    counts = Counter(
+        definition.instances.filter(volunteer__is_active=True).values_list("status", flat=True)
+    )
 
     return render(
         request,
@@ -127,12 +213,12 @@ def definition_detail(request, pk: int):
             "status_counts": [
                 (RequirementStatus(status).label, count) for status, count in sorted(counts.items())
             ],
-            "instance_total": len(instances),
+            "instance_total": sum(counts.values()),
         },
     )
 
 
-@login_required
+@requires(Capability.MANAGE_REQUIREMENTS)
 @require_http_methods(["GET", "POST"])
 def definition_edit(request, pk: int):
     definition = get_object_or_404(RequirementDefinition, pk=pk)
@@ -175,7 +261,7 @@ def _definition_snapshot(definition: RequirementDefinition) -> dict:
     }
 
 
-@login_required
+@requires(Capability.MANAGE_REQUIREMENTS)
 @require_POST
 def definition_toggle_active(request, pk: int):
     """
@@ -207,7 +293,7 @@ def definition_toggle_active(request, pk: int):
     return redirect("requirements:definition_detail", pk=definition.pk)
 
 
-@login_required
+@requires(Capability.MANAGE_REQUIREMENTS)
 @require_POST
 def definition_seed(request):
     """Add any missing items from the Plan to Protect starter template."""
@@ -234,7 +320,7 @@ def definition_seed(request):
 # ---------------------------------------------------------------------------
 
 
-@login_required
+@requires(Capability.RECORD_SCREENING)
 @require_http_methods(["GET", "POST"])
 def instance_complete(request, pk: int):
     """
@@ -246,9 +332,7 @@ def instance_complete(request, pk: int):
     entry, and completing over the top of it would leave a row that reads complete while
     still carrying someone's waiver.
     """
-    instance = get_object_or_404(
-        RequirementInstance.objects.select_related("volunteer", "definition"), pk=pk
-    )
+    instance = _writable_instance_or_404(request, pk)
 
     if not instance.can_mark_complete:
         messages.error(request, _why_completion_is_refused(instance))
@@ -265,8 +349,7 @@ def instance_complete(request, pk: int):
                 notes=form.cleaned_data["notes"],
             )
         except ValidationError as exc:
-            for error in exc.messages:
-                messages.error(request, error)
+            _flash_errors(request, exc)
         else:
             note = ""
             if instance.expires_on:
@@ -331,7 +414,7 @@ def _unmet_dependency(instance: RequirementInstance) -> RequirementInstance | No
     return prior
 
 
-@login_required
+@requires(Capability.RECORD_SCREENING)
 @require_POST
 def instance_start(request, pk: int):
     """
@@ -342,24 +425,33 @@ def instance_start(request, pk: int):
     the button read as navigation rather than as a status change. A plain POST still
     redirects, so the button works with JavaScript unavailable.
     """
-    instance = get_object_or_404(
-        RequirementInstance.objects.select_related("volunteer", "definition"), pk=pk
-    )
+    instance = _writable_instance_or_404(request, pk)
     start_requirement(instance)
+    # Re-annotate before re-rendering the row. Without this the swapped-in fragment loses
+    # its "unverified" badge and the page starts disagreeing with itself.
+    _annotate_review(instance)
 
     if request.headers.get("HX-Request"):
         instance.refresh_from_db()
         return render(
             request,
             "requirements/_instance_row.html",
-            {"instance": instance, "volunteer": instance.volunteer},
+            {
+                "instance": instance,
+                "volunteer": instance.volunteer,
+                # True by construction — the writable lookup above would have refused
+                # otherwise — but passed rather than assumed, because the partial hides
+                # its buttons when this is missing and a swapped-in row that silently
+                # lost its actions is the same class of bug as one that lost its badge.
+                "may_record": may_record_against(request.user, instance.volunteer)[0],
+            },
         )
 
     messages.success(request, f"'{instance.definition.name}' marked as in progress.")
     return redirect("org:volunteer_detail", pk=instance.volunteer.pk)
 
 
-@login_required
+@requires(Capability.RECORD_SCREENING)
 @require_http_methods(["GET", "POST"])
 def instance_waive(request, pk: int):
     """
@@ -368,9 +460,7 @@ def instance_waive(request, pk: int):
     The criminal record check is not waivable; the form is refused for it, and the
     service layer refuses too.
     """
-    instance = get_object_or_404(
-        RequirementInstance.objects.select_related("volunteer", "definition"), pk=pk
-    )
+    instance = _writable_instance_or_404(request, pk)
 
     if instance.definition.is_crc:
         messages.error(
@@ -389,8 +479,7 @@ def instance_waive(request, pk: int):
                 waived_by=form.cleaned_data["waived_by"],
             )
         except ValidationError as exc:
-            for error in exc.messages:
-                messages.error(request, error)
+            _flash_errors(request, exc)
         else:
             messages.success(request, f"'{instance.definition.name}' waived.")
             return redirect("org:volunteer_detail", pk=instance.volunteer.pk)
@@ -398,7 +487,7 @@ def instance_waive(request, pk: int):
     return render(request, "requirements/instance_waive.html", {"form": form, "instance": instance})
 
 
-@login_required
+@requires(Capability.RECORD_SCREENING)
 @require_http_methods(["GET", "POST"])
 def instance_reverse_waiver(request, pk: int):
     """
@@ -408,9 +497,7 @@ def instance_reverse_waiver(request, pk: int):
     same kind of thing as lifting a disqualification, which has no route at all — see
     the note at the top of urls.py.
     """
-    instance = get_object_or_404(
-        RequirementInstance.objects.select_related("volunteer", "definition"), pk=pk
-    )
+    instance = _writable_instance_or_404(request, pk)
 
     if instance.status != RequirementStatus.WAIVED:
         messages.error(
@@ -429,8 +516,7 @@ def instance_reverse_waiver(request, pk: int):
                 reversed_by=form.cleaned_data["reversed_by"],
             )
         except ValidationError as exc:
-            for error in exc.messages:
-                messages.error(request, error)
+            _flash_errors(request, exc)
         else:
             instance.refresh_from_db()
             messages.success(
@@ -447,11 +533,10 @@ def instance_reverse_waiver(request, pk: int):
     )
 
 
-@login_required
+@requires(Capability.VIEW_VOLUNTEERS)
 def instance_detail(request, pk: int):
-    instance = get_object_or_404(
-        RequirementInstance.objects.select_related("volunteer", "definition"), pk=pk
-    )
+    instance = _instance_or_404(request, pk)
+    _annotate_review(instance)
     return render(
         request,
         "requirements/instance_detail.html",
@@ -468,7 +553,7 @@ def instance_detail(request, pk: int):
 # ---------------------------------------------------------------------------
 
 
-@login_required
+@requires(Capability.RECORD_CRC)
 @require_http_methods(["GET", "POST"])
 def crc_record_create(request, volunteer_pk: int):
     """
@@ -477,7 +562,7 @@ def crc_record_create(request, volunteer_pk: int):
     A Cleared result satisfies the requirement and sets a three-year expiry. A Not Clear
     result blocks the volunteer and sends the admin on to record the convictions.
     """
-    volunteer = get_object_or_404(Volunteer, pk=volunteer_pk)
+    volunteer = _writable_volunteer_or_404(request, volunteer_pk)
 
     if volunteer.is_permanently_disqualified:
         messages.error(
@@ -502,8 +587,7 @@ def crc_record_create(request, volunteer_pk: int):
                 notes=data["notes"],
             )
         except ValidationError as exc:
-            for error in exc.messages:
-                messages.error(request, error)
+            _flash_errors(request, exc)
         else:
             if record.result == CRCResult.CLEARED:
                 messages.success(
@@ -523,28 +607,24 @@ def crc_record_create(request, volunteer_pk: int):
     return render(
         request,
         "requirements/crc_form.html",
-        {"form": form, "volunteer": volunteer, "crc_instance": _crc_instance_for(volunteer)},
+        {"form": form, "volunteer": volunteer, "crc_instance": crc_instance_for(volunteer)},
     )
 
 
-def _crc_instance_for(volunteer: Volunteer):
-    from .models import RequirementType
-
-    return volunteer.requirement_instances.filter(
-        definition__requirement_type=RequirementType.CRIMINAL_RECORD_CHECK
-    ).first()
-
-
-@login_required
+@requires(Capability.RECORD_CRC)
 def crc_detail(request, pk: int):
-    record = get_object_or_404(
+    record = _crc_or_404(
+        request,
+        pk,
         CRCRecord.objects.select_related("volunteer").prefetch_related(
             "convictions", "overrides", "documents"
         ),
-        pk=pk,
     )
-    discretionary = record.convictions.filter(is_automatic_disqualifier=False)
-    automatic = record.convictions.filter(is_automatic_disqualifier=True)
+    # Partition the prefetched rows in Python — re-filtering would bypass the
+    # prefetch and cost four queries for lists the page already holds.
+    convictions = list(record.convictions.all())
+    automatic = [c for c in convictions if c.is_automatic_disqualifier]
+    discretionary = [c for c in convictions if not c.is_automatic_disqualifier]
 
     return render(
         request,
@@ -556,7 +636,7 @@ def crc_detail(request, pk: int):
             "discretionary_convictions": discretionary,
             # Only offered when there is a discretionary flag and no automatic one.
             # An automatic disqualifier removes the override option entirely.
-            "can_record_override": discretionary.exists() and not automatic.exists(),
+            "can_record_override": bool(discretionary) and not automatic,
             "needs_outcome": (
                 record.result == CRCResult.NOT_CLEAR
                 and record.not_clear_outcome == CRCNotClearOutcome.PENDING
@@ -565,7 +645,7 @@ def crc_detail(request, pk: int):
     )
 
 
-@login_required
+@requires(Capability.RECORD_CRC)
 @require_http_methods(["GET", "POST"])
 def crc_conviction_add(request, pk: int):
     """
@@ -575,7 +655,7 @@ def crc_conviction_add(request, pk: int):
     disqualifies the volunteer. There is no undo — the confirmation checkbox exists
     because of that.
     """
-    record = get_object_or_404(CRCRecord.objects.select_related("volunteer"), pk=pk)
+    record = _writable_crc_or_404(request, pk)
 
     if record.result != CRCResult.NOT_CLEAR:
         messages.error(request, "Convictions are only recorded against a 'Not Clear' result.")
@@ -595,13 +675,12 @@ def crc_conviction_add(request, pk: int):
                             "is_automatic_disqualifier": data["is_automatic_disqualifier"],
                             "description": data["description"],
                             "conviction_date": data["conviction_date"],
-                            "recorded_by": request.user.get_full_name() or "administrator",
+                            "recorded_by": request.user.display_name,
                         }
                     ],
                 )
         except ValidationError as exc:
-            for error in exc.messages:
-                messages.error(request, error)
+            _flash_errors(request, exc)
         else:
             if outcome["automatic_disqualifier"]:
                 messages.error(
@@ -631,7 +710,7 @@ def crc_conviction_add(request, pk: int):
     )
 
 
-@login_required
+@requires(Capability.RECORD_CRC)
 @require_http_methods(["GET", "POST"])
 def crc_override(request, pk: int):
     """
@@ -640,7 +719,7 @@ def crc_override(request, pk: int):
     Refuses outright if the volunteer is permanently disqualified — that state has no
     override path, and this view will not pretend otherwise.
     """
-    record = get_object_or_404(CRCRecord.objects.select_related("volunteer"), pk=pk)
+    record = _writable_crc_or_404(request, pk)
     volunteer = record.volunteer
 
     if volunteer.is_permanently_disqualified:
@@ -670,8 +749,7 @@ def crc_override(request, pk: int):
                 decided_on=data["decided_on"],
             )
         except ValidationError as exc:
-            for error in exc.messages:
-                messages.error(request, error)
+            _flash_errors(request, exc)
         else:
             messages.success(
                 request,
@@ -687,11 +765,11 @@ def crc_override(request, pk: int):
     )
 
 
-@login_required
+@requires(Capability.RECORD_CRC)
 @require_http_methods(["GET", "POST"])
 def crc_resolve_not_clear(request, pk: int):
     """Record which of the two policy outcomes resolved a Not Clear result."""
-    record = get_object_or_404(CRCRecord.objects.select_related("volunteer"), pk=pk)
+    record = _writable_crc_or_404(request, pk)
 
     if record.result != CRCResult.NOT_CLEAR:
         messages.error(request, "Only a 'Not Clear' result needs an outcome recorded.")
@@ -707,8 +785,7 @@ def crc_resolve_not_clear(request, pk: int):
                 notes=form.cleaned_data["notes"],
             )
         except ValidationError as exc:
-            for error in exc.messages:
-                messages.error(request, error)
+            _flash_errors(request, exc)
         else:
             messages.success(request, "Outcome recorded.")
             return redirect("requirements:crc_detail", pk=record.pk)

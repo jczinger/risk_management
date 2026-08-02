@@ -102,31 +102,10 @@ person's own file, produced for their record, for leadership, or for an audit.
     </thead>
     <tbody>
       {% for instance in onboarding %}
-        <tr>
-          <td>{{ instance.definition.name }}</td>
-          <td class="small">{{ instance.definition.appendix_reference|default:"—" }}</td>
-          <td class="small nowrap">{{ instance.definition.cadence_display }}</td>
-          <td>
-            {{ instance.get_status_display }}
-            {% if instance.not_applicable_reason %}<div class="row-note">{{ instance.not_applicable_reason }}</div>{% endif %}
-            {% if instance.status == "waived" %}<div class="row-note">waived by {{ instance.waived_by }} on {{ instance.waived_on|date:"j M Y" }}</div>{% endif %}
-          </td>
-          <td class="nowrap">{{ instance.completed_on|date:"j M Y"|default:"—" }}</td>
-          <td class="nowrap">{{ instance.effective_due_date|date:"j M Y"|default:"—" }}</td>
-        </tr>
+        {% include "reporting/_file_requirement_row.html" %}
       {% endfor %}
       {% for instance in recurring %}
-        <tr>
-          <td>{{ instance.definition.name }}</td>
-          <td class="small">{{ instance.definition.appendix_reference|default:"—" }}</td>
-          <td class="small nowrap">{{ instance.definition.cadence_display }}</td>
-          <td>
-            {{ instance.get_status_display }}
-            {% if instance.not_applicable_reason %}<div class="row-note">{{ instance.not_applicable_reason }}</div>{% endif %}
-          </td>
-          <td class="nowrap">{{ instance.completed_on|date:"j M Y"|default:"—" }}</td>
-          <td class="nowrap">{{ instance.effective_due_date|date:"j M Y"|default:"—" }}</td>
-        </tr>
+        {% include "reporting/_file_requirement_row.html" %}
       {% endfor %}
       {% if not onboarding and not recurring %}
         <tr><td colspan="6">No requirements apply yet.</td></tr>

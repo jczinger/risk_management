@@ -6,7 +6,18 @@
 <div class="page-head">
   <div>
     <h1>Add a screening administrator</h1>
-    <p class="lede">They will have the same access you do, including to volunteers' personal information.</p>
+    {# The lede used to say "they will have the same access you do". Written before
+       access levels existed, and left contradicting the form directly beneath it, which
+       asks you to choose one. Corrected 2026-08-02. #}
+    <p class="lede">
+      {% if existing_file %}
+        Making {{ existing_file.full_name }} an administrator. Their existing screening
+        record stays theirs, and will be linked to the new account.
+      {% else %}
+        Choose what they may do. They will also get their own screening record, because
+        an administrator is somebody who serves too.
+      {% endif %}
+    </p>
   </div>
 </div>
 

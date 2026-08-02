@@ -44,15 +44,37 @@ because a third-party host is down.
   {% if user.is_authenticated %}
     <nav class="nav" aria-label="Main">
       {% block nav %}
+        {% comment %}
+        Guarded by capability. A link nobody can follow is a support ticket per click —
+        but the decorator on each view is what actually refuses, not this. See
+        apps/core/context_processors.py for why `can` is a context variable rather than a
+        template tag, and note that a misspelled guard hides its link rather than
+        exposing it.
+        {% endcomment %}
         <a href="/" {% if nav == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
-        <a href="{% url 'org:volunteer_list' %}" {% if nav == 'volunteers' %}class="active"{% endif %}>Volunteers</a>
-        <a href="{% url 'org:department_list' %}" {% if nav == 'departments' %}class="active"{% endif %}>Departments</a>
-        <a href="{% url 'org:role_list' %}" {% if nav == 'roles' %}class="active"{% endif %}>Roles</a>
-        <a href="{% url 'requirements:definition_list' %}" {% if nav == 'requirements' %}class="active"{% endif %}>Requirements</a>
-        <a href="{% url 'documents:list' %}" {% if nav == 'documents' %}class="active"{% endif %}>Documents</a>
-        <a href="{% url 'reporting:compliance' %}" {% if nav == 'reports' %}class="active"{% endif %}>Reports</a>
-        <a href="{% url 'reporting:audit_trail' %}" {% if nav == 'audit' %}class="active"{% endif %}>Audit trail</a>
-        <a href="{% url 'accounts:admin_list' %}" {% if nav == 'admins' %}class="active"{% endif %}>Administrators</a>
+        {% if can.view_volunteers %}
+          <a href="{% url 'org:volunteer_list' %}" {% if nav == 'volunteers' %}class="active"{% endif %}>Volunteers</a>
+          <a href="{% url 'org:department_list' %}" {% if nav == 'departments' %}class="active"{% endif %}>Departments</a>
+          <a href="{% url 'org:role_list' %}" {% if nav == 'roles' %}class="active"{% endif %}>Roles</a>
+        {% endif %}
+        {% if can.manage_requirements %}
+          <a href="{% url 'requirements:definition_list' %}" {% if nav == 'requirements' %}class="active"{% endif %}>Requirements</a>
+        {% endif %}
+        {% if can.view_volunteers %}
+          <a href="{% url 'documents:list' %}" {% if nav == 'documents' %}class="active"{% endif %}>Documents</a>
+          <a href="{% url 'reporting:compliance' %}" {% if nav == 'reports' %}class="active"{% endif %}>Reports</a>
+        {% endif %}
+        {% if can.view_audit %}
+          <a href="{% url 'reporting:audit_trail' %}" {% if nav == 'audit' %}class="active"{% endif %}>Audit trail</a>
+        {% endif %}
+        {% if review_backlog.pending or review_backlog.mine %}
+          <a href="{% url 'review:queue' %}" {% if nav == 'review' %}class="active"{% endif %}>
+            Review{% if review_backlog.pending %} ({{ review_backlog.pending }}){% endif %}
+          </a>
+        {% endif %}
+        {% if can.manage_users %}
+          <a href="{% url 'accounts:admin_list' %}" {% if nav == 'admins' %}class="active"{% endif %}>Administrators</a>
+        {% endif %}
       {% endblock %}
     </nav>
   {% endif %}

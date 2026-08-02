@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Send back — {{ item.entity_label }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Send this entry back</h1>
+    <p class="lede">
+      {{ item.get_kind_display }} for
+      <a href="{% url 'org:volunteer_detail' item.volunteer.pk %}">{{ item.volunteer.display_name }}</a>,
+      recorded by {{ item.recorded_by_display }} on {{ item.created_at|date:"j F Y" }}.
+    </p>
+  </div>
+</div>
+
+{% if cannot_undo %}
+  {% comment %}
+  Stated before the click, not after. For a permanent disqualification, "after" is far too
+  late for the information to be any use.
+  {% endcomment %}
+  <div class="card">
+    <h2>What this will not undo</h2>
+    <ul>
+      {% for note in cannot_undo %}<li>{{ note }}</li>{% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+<div class="card">
+  <form method="post">
+    {% csrf_token %}
+    {% include "partials/form.html" with form=form %}
+    <div class="btn-row">
+      <button type="submit" class="btn btn--primary">Send back</button>
+      <a class="btn" href="{% url 'review:queue' %}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -8,6 +8,14 @@ the current actor here and the audit recorder reads it back.
 A thread-local is safe under gunicorn's sync workers (one request per thread at a
 time) and under Celery's prefork pool. It is deliberately *not* relied upon for
 correctness of authorisation — only for labelling.
+
+One narrowing of that last sentence, added 2026-08-02 so it stays honest. Two facts
+carried here *are* read for correctness: ``user_id``, to tell whether a writer is acting
+on their own screening file, and the scoped flag, to tell whether their work needs
+affirming. Both are questions about *who the person is*, never about *what they are
+allowed to do* — every "may they?" is still answered from ``request.user`` in the view
+and re-answered in the service. Both also fail closed: an unresolvable identity matches
+nobody's record, and an unresolvable access level is treated as needing review.
 """
 
 from __future__ import annotations
@@ -31,11 +39,54 @@ class Actor:
     display: str
     ip: str = ""
     user_agent: str = ""
+    #: Whether the actor's access level is limited to particular departments. Carried
+    #: here so a service
+    #: function can tell whether its work needs somebody else's affirmation without
+    #: growing a ``user`` parameter — see :func:`apps.review.recording.needs_review`.
+    access_level_is_scoped: bool = False
+    #: Set when the access level could not be resolved at all. Distinct from "unscoped":
+    #: not knowing is not the same as knowing there is nothing to know. See
+    #: :attr:`needs_review`.
+    access_level_unknown: bool = False
+    #: The departments they administer, used only to record *which* one gave them access
+    #: to a volunteer. Provenance for the review queue, never authorisation.
+    department_ids: tuple[int, ...] = ()
 
     @classmethod
     def system(cls, label: str = "system") -> "Actor":
-        """A scheduled job or management command, with no human behind it."""
+        """
+        A scheduled job or management command, with no human behind it.
+
+        Holds no access level, so nothing it records is ever queued for review. That is
+        correct — there is nobody to attribute it to and nobody it makes sense to send it
+        back to — but it is only *safe* because none of the reviewed writers is reachable
+        from the nightly sweep. Asserted by a test rather than assumed.
+        """
         return cls(user_id=None, display=label)
+
+    @property
+    def needs_review(self) -> bool:
+        """
+        Whether this actor's work has to be affirmed by somebody else.
+
+        Keyed on **scoped-ness**, not on the built-in slug. It used to compare against
+        ``"department-admin"`` exactly, which meant a church that built its own limited
+        level on the access-level screen — "Youth Admin", say — recorded work that never
+        entered the review queue while still being refused as a reviewer. Silently: no
+        error, no badge, nothing to notice. Fixed 2026-08-02.
+
+        Reading the same flag :func:`apps.review.services.may_review` reads is the point.
+        "A scoped admin's work needs affirming" and "only an unscoped admin may affirm"
+        are now two statements about one axis, so they cannot drift apart.
+
+        Not knowing fails **closed**. If the level could not be resolved and there is a
+        person behind this actor, assume it needs review: a spurious item is a nuisance
+        somebody can clear in one click, while a missing one reads as "somebody checked
+        this" forever.
+        """
+        if self.access_level_unknown:
+            return self.user_id is not None
+        return self.access_level_is_scoped
 
 
 def set_actor(actor: Actor | None) -> None:
@@ -63,7 +114,15 @@ def acting_as(actor: Actor):
 
 
 def actor_from_request(request) -> Actor:
-    """Build an :class:`Actor` from a Django request."""
+    """
+    Build an :class:`Actor` from a Django request.
+
+    The access level and department set are read here because this runs once per request,
+    where the alternative would be a lookup inside each service call. ``AuthenticationMiddleware``
+    has already loaded the user, and ``apps.core.access`` caches the grant on the instance,
+    so the whole thing costs at most one query per request and none at all for an
+    anonymous one.
+    """
     user = getattr(request, "user", None)
     if user is not None and getattr(user, "is_authenticated", False):
         user_id = user.pk
@@ -78,7 +137,46 @@ def actor_from_request(request) -> Actor:
         ip=_client_ip(request),
         # Truncated: the audit table is not a place to accumulate unbounded strings.
         user_agent=(request.META.get("HTTP_USER_AGENT") or "")[:200],
+        **_access_context(user),
     )
+
+
+def _access_context(user) -> dict:
+    """
+    The acting user's access level and departments, or blanks.
+
+    Kept tolerant on purpose. This runs for *every* request, including on the public
+    schema where the access tables do not exist and on the sign-in page where nobody is
+    authenticated yet, and a failure here would take down a request that has nothing to do
+    with access levels.
+
+    Tolerant is not the same as silent, and it used to be. Swallowing the error and
+    returning blanks made the actor look *unscoped*, which made
+    :attr:`Actor.needs_review` answer False — so one transient database hiccup meant a
+    department admin's entry was recorded as though a Primary Admin had done it, with
+    nothing anywhere to say so. The failure now sets ``access_level_unknown``, which the
+    review gate treats as "needs review", matching
+    :func:`apps.review.recording.open_if_unverified`'s posture of refusing to guess.
+    """
+    if user is None or not getattr(user, "is_authenticated", False):
+        return {}
+
+    try:
+        from apps.core.access import grant_for, scope_department_ids
+
+        grant = grant_for(user)
+        if grant is None:
+            # A signed-in administrator with no grant holds no access level at all, which
+            # is a known state (the backfill exists to prevent it) rather than a failure.
+            return {}
+        scope = scope_department_ids(user)
+        return {
+            "access_level_is_scoped": grant.access_level.is_scoped,
+            "department_ids": tuple(sorted(scope)) if scope else (),
+        }
+    except Exception:  # noqa: BLE001 - labelling must never break a request
+        logger.error("Could not resolve the acting user's access level", exc_info=True)
+        return {"access_level_unknown": True}
 
 
 def record(

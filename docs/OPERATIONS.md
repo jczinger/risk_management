@@ -200,9 +200,91 @@ count and any provider error.
 
 ## Administrators
 
-Each church manages its own, under **Administrators**. All of them have equal permissions within
-their church — there are no sub-roles by design. Adding one mints a single-use sign-in link,
-emailed and shown on screen.
+Each church manages its own, under **Administrators**. Adding one mints a single-use
+sign-in link, emailed and shown on screen.
+
+What each administrator may do is set by their **access level**, managed on the same screen.
+Two are provided:
+
+- **Primary Admin** — the whole church: every volunteer, every department, the audit trail,
+  the administrators list. Primary Admins also review and affirm the work of anyone on a
+  limited level.
+- **Department Admin** — limited to the departments they are given. They see only volunteers
+  who have served in those departments, and everything they record is affirmed by a Primary
+  Admin before anybody has confirmed the evidence behind it.
+
+A church can add its own levels. Two rules are enforced and cannot be turned off: nobody can
+grant an access level wider than their own, and a level limited to particular departments
+cannot be given the audit trail — an audit entry does not record a department, so there is
+nothing to limit it by.
+
+Before 2026-07-29 every administrator at a church had identical access. See BUILD_NOTES
+§1.21 for what changed and why.
+
+Every administrator also gets a **volunteer record** of their own, because an administrator is
+somebody who serves and Plan to Protect screens people who serve. It is created with their
+account, from their name and address, and starts with no ministry role — so until you give them
+one it is visible only to administrators who see the whole church.
+
+**Nobody records screening against their own file** while somebody else could: not their own
+criminal record check, not their own training, not their own ministry roles. They can read it in
+full. The last church-wide administrator at a church is the exception, so a one-administrator
+church is never stuck; the audit entry says when that happened. See BUILD_NOTES §1.22.
+
+### An administrator has no volunteer record
+
+Usually because a volunteer already existed under the same name, in which case VMS deliberately
+created nothing rather than risk attaching them to somebody else's file or making a duplicate.
+The **Administrators** screen shows the collision with a link-or-create choice; resolve it there.
+
+To see the state of a whole church, or of every church:
+
+```bash
+docker compose exec web python manage.py link_admin_volunteers --schema <church>
+```
+
+That only reports. Add `--create` to create the records it says it would — it still refuses every
+name collision, which stays a human decision. Run it after upgrading a church that predates
+2026-08-02.
+
+### Somebody needs their own screening recorded and they are the only administrator
+
+Nothing to do: VMS allows it and says so in the audit trail. If there are two administrators and
+one needs their own file completed, the other one does it.
+
+### An administrator can suddenly do nothing
+
+Check whether they hold an access level at all:
+
+```bash
+docker compose exec web python manage.py access_levels --schema <church>
+```
+
+An account with **NO ACCESS LEVEL** can do nothing — `has_capability` fails closed by
+design. Repair it with `--email`, which makes that person a Primary Admin and never demotes
+anybody:
+
+```bash
+docker compose exec web python manage.py access_levels --schema <church> --email admin@church.ca
+```
+
+The same command with no `--email` only reports, so it is safe to run first — and worth
+running straight after any deploy that touches access, **before** signing out of a session
+you might not get back.
+
+### Nobody can reach the access-level screen
+
+VMS refuses to let this happen: the last active administrator with church-wide access to
+manage administrators cannot be deactivated, demoted or re-scoped. If a restore or a botched
+migration produces it anyway, the repair command above is the way out. It needs shell access
+to the host.
+
+### Entries are piling up awaiting review
+
+The dashboard shows a count, and the nightly digest carries a line once anything has been
+waiting more than 30 days. Until an entry is affirmed the compliance report still counts it
+as compliant, so a backlog does not look like a problem anywhere except those two places —
+which is why they exist.
 
 ### Issuing a sign-in link by hand
 

@@ -75,13 +75,13 @@ volunteer_list.html for the full page.
   {% if page.has_other_pages %}
     <div class="pager">
       {% if page.has_previous %}
-        <a class="btn btn--sm" hx-get="?page={{ page.previous_page_number }}" hx-target="#volunteer-results"
-           href="?page={{ page.previous_page_number }}">Previous</a>
+        <a class="btn btn--sm" hx-get="?{% if filter_query %}{{ filter_query }}&amp;{% endif %}page={{ page.previous_page_number }}" hx-target="#volunteer-results"
+           href="?{% if filter_query %}{{ filter_query }}&amp;{% endif %}page={{ page.previous_page_number }}">Previous</a>
       {% endif %}
       <span class="small muted">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
       {% if page.has_next %}
-        <a class="btn btn--sm" hx-get="?page={{ page.next_page_number }}" hx-target="#volunteer-results"
-           href="?page={{ page.next_page_number }}">Next</a>
+        <a class="btn btn--sm" hx-get="?{% if filter_query %}{{ filter_query }}&amp;{% endif %}page={{ page.next_page_number }}" hx-target="#volunteer-results"
+           href="?{% if filter_query %}{{ filter_query }}&amp;{% endif %}page={{ page.next_page_number }}">Next</a>
       {% endif %}
     </div>
   {% endif %}

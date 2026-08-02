@@ -6,11 +6,12 @@
   <div>
     <h1>Screening administrators</h1>
     <p class="lede">
-      Everyone here has the same permissions at {{ church_name|default:"this church" }}.
-      Accounts are deactivated rather than deleted, so the audit trail keeps resolving.
+      What each person can do is set by their access level. Accounts are deactivated
+      rather than deleted, so the audit trail keeps resolving.
     </p>
   </div>
   <div class="actions">
+    <a class="btn" href="{% url 'accounts:access_level_list' %}">Access levels</a>
     <a class="btn btn--primary" href="{% url 'accounts:admin_invite' %}">Add an administrator</a>
   </div>
 </div>
@@ -20,17 +21,69 @@
     <table class="data">
       <thead>
         <tr>
-          <th>Name</th><th>Email</th><th>Sign-in methods</th>
+          <th>Name</th><th>Access level</th><th>Screening file</th><th>Sign-in</th>
           <th>Last signed in</th><th>Status</th><th></th>
         </tr>
       </thead>
       <tbody>
         {% for admin in admins %}
           <tr>
-            <td><strong>{{ admin.get_full_name|default:"—" }}</strong>{% if admin.pk == user.pk %} <span class="badge badge--info">you</span>{% endif %}</td>
-            <td class="small">{{ admin.email }}</td>
+            <td>
+              <strong>{{ admin.get_full_name|default:"—" }}</strong>{% if admin.pk == user.pk %} <span class="badge badge--info">you</span>{% endif %}
+              <div class="small muted">{{ admin.email }}</div>
+            </td>
+            <td>
+              {% if admin.grant %}
+                <a href="{% url 'accounts:admin_access' admin.pk %}">{{ admin.grant.access_level.name }}</a>
+                <div class="small muted">
+                  {% if admin.grant.access_level.is_scoped %}
+                    {% for department in admin.grant.departments.all %}{{ department.name }}{% if not forloop.last %}, {% endif %}{% empty %}
+                      <span class="badge badge--warn">No departments — sees nothing</span>
+                    {% endfor %}
+                  {% else %}
+                    All departments
+                  {% endif %}
+                </div>
+              {% else %}
+                {# The state the backfill migration exists to prevent: this account can do nothing. #}
+                <a class="badge badge--warn" href="{% url 'accounts:admin_access' admin.pk %}">No access level</a>
+              {% endif %}
+            </td>
+            <td>
+              {# An administrator is a person who serves, and Plan to Protect screens
+                 people who serve. Where no file exists, this cell is the prompt — and
+                 where a record already exists under that name, VMS refuses to guess
+                 which it is, because merging two screening files has no undo. #}
+              {% if admin.volunteer_file %}
+                <a href="{% url 'org:volunteer_detail' admin.volunteer_file.pk %}">{{ admin.volunteer_file.full_name }}</a>
+                {% if not admin.volunteer_file.active_roles %}
+                  <div class="small muted">No ministry role yet</div>
+                {% endif %}
+              {% elif admin.possible_files %}
+                <span class="badge badge--warn">Possible existing record</span>
+                <div class="mt1" style="display:flex; gap:.35rem; flex-wrap:wrap">
+                  {% for candidate in admin.possible_files %}
+                    <form method="post" action="{% url 'accounts:admin_link_volunteer' admin.pk %}">
+                      {% csrf_token %}
+                      <input type="hidden" name="volunteer" value="{{ candidate.pk }}">
+                      <button type="submit" class="btn btn--sm">Link {{ candidate.full_name }}</button>
+                    </form>
+                  {% endfor %}
+                  <form method="post" action="{% url 'accounts:admin_create_volunteer' admin.pk %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn--sm">Create a separate one</button>
+                  </form>
+                </div>
+              {% else %}
+                <span class="badge badge--warn">No record</span>
+                <form method="post" action="{% url 'accounts:admin_create_volunteer' admin.pk %}" class="mt1">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn--sm">Create</button>
+                </form>
+              {% endif %}
+            </td>
             <td class="pill-row">
-              {% if admin.has_passkey %}<span class="badge badge--ok">Passkey</span>
+              {% if admin.passkey_registered %}<span class="badge badge--ok">Passkey</span>
               {% else %}<span class="badge badge--warn">No passkey yet</span>{% endif %}
             </td>
             <td class="small nowrap">{{ admin.last_login_at|date:"j M Y, H:i"|default:"Never" }}</td>
@@ -39,12 +92,13 @@
               {% else %}<span class="badge badge--muted">Inactive</span>{% endif %}
             </td>
             <td class="right" style="display:flex; gap:.35rem; justify-content:flex-end; flex-wrap:wrap">
+              <a class="btn btn--sm" href="{% url 'accounts:admin_access' admin.pk %}">Access</a>
               {% if admin.pk != user.pk %}
                 {% if admin.is_active %}
                   <form method="post" action="{% url 'accounts:admin_reissue_link' admin.pk %}">
                     {% csrf_token %}
                     <button type="submit" class="btn btn--sm">
-                      {% if admin.has_passkey %}New sign-in link{% else %}Resend invite{% endif %}
+                      {% if admin.passkey_registered %}New sign-in link{% else %}Resend invite{% endif %}
                     </button>
                   </form>
                 {% endif %}
@@ -58,7 +112,7 @@
             </td>
           </tr>
         {% empty %}
-          <tr><td colspan="6" class="empty"><strong>No administrators</strong>That should not be possible — contact the platform operator.</td></tr>
+          <tr><td colspan="7" class="empty"><strong>No administrators</strong>That should not be possible — contact the platform operator.</td></tr>
         {% endfor %}
       </tbody>
     </table>

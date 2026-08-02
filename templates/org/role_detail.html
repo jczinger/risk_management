@@ -8,7 +8,7 @@
     <p class="lede"><a href="{% url 'org:department_detail' role.department.pk %}">{{ role.department.name }}</a></p>
   </div>
   <div class="actions">
-    <a class="btn" href="{% url 'org:role_edit' role.pk %}">Edit</a>
+    {% if can.manage_org %}<a class="btn" href="{% url 'org:role_edit' role.pk %}">Edit</a>{% endif %}
     <a class="btn" href="{% url 'reporting:compliance' %}?department={{ role.department.pk }}">Compliance report</a>
   </div>
 </div>

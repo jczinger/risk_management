@@ -16,3 +16,13 @@ This is the daily summary of volunteer screening requirements coming due or over
 this system.
 
 Reminder timing is configurable per church by the platform operator.
+{% if review.pending %}
+AWAITING YOUR REVIEW
+{{ review.pending }} entr{{ review.pending|pluralize:"y,ies" }} recorded by an administrator
+on a limited access level {{ review.pending|pluralize:"is,are" }} waiting to be affirmed.
+{% if review.stale %}{{ review.stale }} of them {{ review.stale|pluralize:"has,have" }} been waiting more than 30 days.
+{% endif %}These entries already count towards this church's compliance figures, so until
+they are affirmed the report rests on evidence nobody has confirmed.
+
+Review them: {{ dashboard_url }}review/
+{% endif %}

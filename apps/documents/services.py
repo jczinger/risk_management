@@ -21,9 +21,12 @@ from django.db import connection, transaction
 from django.utils import timezone
 
 from apps.core import audit
+from apps.core.access import refuse_self_recording
 from apps.core.crypto import decrypt_bytes, encrypt_bytes
 from apps.core.keys import get_current_key
 from apps.core.models import AuditAction
+from apps.review.models import ReviewKind
+from apps.review.recording import open_if_unverified
 from apps.tenants.models import DocumentMode
 
 from .models import (
@@ -43,6 +46,21 @@ def current_mode() -> str:
     return getattr(tenant, "document_mode", DocumentMode.TRACK)
 
 
+def check_upload_size(upload) -> None:
+    """
+    Refuse an upload past the size ceiling.
+
+    One checker, one message — the form calls this for a field error before the
+    upload is read, and :func:`validate_upload` calls it again as the service-layer
+    backstop for anything that bypasses the form.
+    """
+    if upload.size is not None and upload.size > settings.VMS_MAX_UPLOAD_BYTES:
+        raise ValidationError(
+            f"That file is {upload.size / 1024 / 1024:.1f} MB. The limit is "
+            f"{settings.VMS_MAX_UPLOAD_MB} MB."
+        )
+
+
 def validate_upload(upload) -> tuple[bytes, str]:
     """
     Read and check an uploaded file. Returns ``(plaintext_bytes, content_type)``.
@@ -52,11 +70,7 @@ def validate_upload(upload) -> tuple[bytes, str]:
     """
     max_bytes = settings.VMS_MAX_UPLOAD_BYTES
 
-    if upload.size is not None and upload.size > max_bytes:
-        raise ValidationError(
-            f"That file is {upload.size / 1024 / 1024:.1f} MB. The limit is "
-            f"{settings.VMS_MAX_UPLOAD_MB} MB."
-        )
+    check_upload_size(upload)
 
     import os
 
@@ -130,7 +144,11 @@ def complete_backing_requirement(document, instance) -> bool:
 
     completed_on = document.document_date or timezone.localdate()
     try:
-        mark_requirement_complete(instance, completed_on)
+        # open_review=False: the document is the thing being reviewed, and
+        # ``store_document`` opens one item pointing at both it and this requirement. Two
+        # items would mean two clicks for one act, and would let the pair be affirmed
+        # separately — the "file disagrees with itself" failure BUILD_NOTES §1.15 closes.
+        mark_requirement_complete(instance, completed_on, open_review=False)
     except ValidationError as exc:
         logger.warning(
             "Document %s recorded but '%s' was not completed: %s",
@@ -142,6 +160,7 @@ def complete_backing_requirement(document, instance) -> bool:
     return True
 
 
+@transaction.atomic
 def store_document(
     *,
     volunteer,
@@ -164,6 +183,8 @@ def store_document(
     fact and the dates. The mode is stamped onto the row so a later mode change does not
     make existing records inconsistent.
     """
+    refuse_self_recording(volunteer)
+
     mode = current_mode()
 
     document = Document(
@@ -210,7 +231,7 @@ def store_document(
     if supersedes is not None:
         supersedes.supersede_with(document)
 
-    complete_backing_requirement(document, requirement_instance)
+    completed = complete_backing_requirement(document, requirement_instance)
 
     audit.record(
         AuditAction.UPLOAD,
@@ -226,6 +247,22 @@ def store_document(
             "sha256": document.plaintext_sha256,
             "supersedes": supersedes.pk if supersedes else None,
         },
+    )
+    # One item for the whole act, pointing at the requirement as well as the document, so
+    # the requirement's row reads "unverified" — which is the row an admin is looking at.
+    open_if_unverified(
+        kind=ReviewKind.DOCUMENT,
+        volunteer=volunteer,
+        entity_type="Document",
+        entity_id=document.pk,
+        entity_label=f"{volunteer.display_name} — {document.title}",
+        before_state={"is_current": True},
+        affected_entity=(
+            ("RequirementInstance", requirement_instance.pk)
+            if completed and requirement_instance
+            else None
+        ),
+        summary=f"{document.get_kind_display()} recorded — awaiting affirmation",
     )
     logger.info(
         "Document recorded volunteer=%s mode=%s kind=%s bytes=%s",

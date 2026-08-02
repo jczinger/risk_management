@@ -5,7 +5,10 @@ from django.http import JsonResponse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.csrf import csrf_exempt
 
+from .access import public_view
 
+
+@public_view("container and reverse-proxy health probe")
 @never_cache
 @csrf_exempt
 def healthz(request):

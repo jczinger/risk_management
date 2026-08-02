@@ -8,8 +8,10 @@
     {% if department.description %}<p class="lede">{{ department.description }}</p>{% endif %}
   </div>
   <div class="actions">
-    <a class="btn" href="{% url 'org:role_create' %}?department={{ department.pk }}">Add a role here</a>
-    <a class="btn" href="{% url 'org:department_edit' department.pk %}">Edit</a>
+    {% if can.manage_org %}
+      <a class="btn" href="{% url 'org:role_create' %}?department={{ department.pk }}">Add a role here</a>
+      <a class="btn" href="{% url 'org:department_edit' department.pk %}">Edit</a>
+    {% endif %}
     <a class="btn" href="{% url 'reporting:compliance' %}?department={{ department.pk }}">Compliance report</a>
   </div>
 </div>
@@ -20,18 +22,7 @@
     <table class="data">
       <thead><tr><th>Role</th><th>Flags</th><th class="num">Serving</th><th>Status</th></tr></thead>
       <tbody>
-        {% for role in roles %}
-          <tr>
-            <td><a href="{% url 'org:role_detail' role.pk %}"><strong>{{ role.name }}</strong></a></td>
-            <td class="pill-row">
-              {% if role.is_leadership %}<span class="badge badge--info">Leadership</span>{% endif %}
-            </td>
-            <td class="num">{{ role.holders }}</td>
-            <td>{% if role.is_active %}<span class="badge badge--ok">Active</span>{% else %}<span class="badge badge--muted">Inactive</span>{% endif %}</td>
-          </tr>
-        {% empty %}
-          <tr><td colspan="4" class="empty"><strong>No roles in this department yet</strong></td></tr>
-        {% endfor %}
+        {% include "org/_role_rows.html" with empty_title="No roles in this department yet" %}
       </tbody>
     </table>
   </div>
